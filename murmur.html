@@ -1660,6 +1660,8 @@ function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   harmonics[0] = 0.4; harmonics[1] = 0.2; harmonics[3] = 0.1;
   setOscWave(osc, harmonics);
   osc.frequency.value = freq;
+  // Apply current pitch-bend so a note triggered mid-bend doesn't jump.
+  osc.detune.value = pitchBendCents;
   const filter = audioCtx.createBiquadFilter();
   filter.type = 'lowpass';
   filter.frequency.value = Math.min(8000, freq * 16);
@@ -1842,8 +1844,16 @@ function noteOff(midi) {
     recordingBuffer.lastActivityMs = performance.now();
     rescheduleRecordingAutoFinish();
   }
-  liveNoteOff(midi);
+  // Sustain pedal: defer audible release until the pedal lifts. The
+  // recording timestamps above already captured the finger-release
+  // time, so the recorded duration reflects the keypress, not the
+  // sustained tail — matching standard MIDI-piano convention.
   highlightPianoKey(midi, false);
+  if (sustainPedalDown && activeLiveNotes.has(midi)) {
+    sustainedMidis.add(midi);
+    return;
+  }
+  liveNoteOff(midi);
 }
 
 // Auto-finish recording when there's been no activity AND no keys held.
@@ -1870,6 +1880,48 @@ function checkAutoFinishRecording() {
 
 // === Web MIDI ===
 let midiAccess = null;
+const midiOutputs = [];  // populated by refreshMIDIInputs; reserved for SysEx light/screen control
+
+// === Expressive controls (pitch bend, sustain) ===
+const PITCH_BEND_RANGE_SEMITONES = 2;   // standard default
+let pitchBendCents = 0;
+function applyPitchBend(normalised) {
+  // normalised in [-1, +1]. Convert to cents and push to every held note.
+  pitchBendCents = normalised * PITCH_BEND_RANGE_SEMITONES * 100;
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  for (const note of activeLiveNotes.values()) {
+    try { note.osc.detune.setTargetAtTime(pitchBendCents, now, 0.005); } catch (e) {}
+  }
+}
+
+let sustainPedalDown = false;
+const sustainedMidis = new Set();
+function setSustainPedal(down) {
+  if (down === sustainPedalDown) return;
+  sustainPedalDown = down;
+  if (!down) {
+    for (const m of sustainedMidis) liveNoteOff(m);
+    sustainedMidis.clear();
+  }
+}
+
+// === Pad routing ===
+// MiniLab 3 pads sit on MIDI channel 10. Bank A (notes 36-43) keeps the
+// default behaviour of playing pitched live notes, so the pads remain a
+// finger-drumming surface. Bank B (notes 44-51) acts as a plant-mode
+// selector — pressing a Bank B pad is the same as clicking a chip in
+// the top bar. Bank switch is local-only on the device.
+const PAD_BANK_B_TO_PLANT = [
+  'drop',   // pad 1 (note 44)
+  'muffle', // pad 2 (note 45)
+  'thin',   // pad 3 (note 46)
+  'rise',   // pad 4 (note 47)
+  'voice',  // pad 5 (note 48)
+  'weave',  // pad 6 (note 49)
+  'ripple', // pad 7 (note 50)
+  'cloud',  // pad 8 (note 51)
+];
 
 // === MIDI debug log ===
 // Every incoming MIDI message is recorded so we can dump a trace
@@ -1978,6 +2030,8 @@ function refreshMIDIInputs() {
     inputCount++;
     if (!firstName) firstName = input.name || 'midi';
   }
+  midiOutputs.length = 0;
+  for (const output of midiAccess.outputs.values()) midiOutputs.push(output);
   const led = document.getElementById('midi-led');
   const label = document.getElementById('midi-label');
   if (inputCount > 0) {
@@ -1990,12 +2044,41 @@ function refreshMIDIInputs() {
 }
 function handleMIDIMessage(evt) {
   logMIDI(evt, evt.target && evt.target.name);
-  const [status, note, velocity] = evt.data;
+  const data = evt.data;
+  const status = data[0];
   const cmd = status & 0xf0;
-  if (cmd === 0x90 && velocity > 0) {
+  const channel = (status & 0x0f) + 1;
+  // Pitch bend (14-bit, lsb first)
+  if (cmd === 0xe0) {
+    const value = ((data[2] << 7) | data[1]) - 8192;
+    applyPitchBend(value / 8192);
+    return;
+  }
+  // Continuous controllers
+  if (cmd === 0xb0) {
+    const cc = data[1], v = data[2];
+    if (cc === 64) setSustainPedal(v >= 64);
+    return;
+  }
+  // Notes
+  if (cmd === 0x90 && data[2] > 0) {
+    const note = data[1], velocity = data[2];
+    // MiniLab 3 pad bank B (channel 10, notes 44-51) selects plant mode
+    if (channel === 10 && note >= 44 && note <= 51) {
+      const kind = PAD_BANK_B_TO_PLANT[note - 44];
+      if (kind) setPlantMode(kind);
+      flashMidiLED();
+      return;
+    }
     noteOn(note, velocity / 127, 'midi');
-  } else if (cmd === 0x80 || (cmd === 0x90 && velocity === 0)) {
+    return;
+  }
+  if (cmd === 0x80 || (cmd === 0x90 && data[2] === 0)) {
+    const note = data[1];
+    // Bank B pads are momentary mode-set; ignore their note-off.
+    if (channel === 10 && note >= 44 && note <= 51) return;
     noteOff(note);
+    return;
   }
 }
 function flashMidiLED() {
@@ -3192,12 +3275,17 @@ window.addEventListener('pointermove', continueSweepDrag);
 window.addEventListener('pointerup', endDrag);
 window.addEventListener('pointerup', endSweepDrag);
 
+function setPlantMode(kind) {
+  const opt = document.querySelector(`.plant-opt[data-kind="${kind}"]`);
+  if (!opt) return;
+  plantMode = kind;
+  document.querySelectorAll('.plant-opt').forEach(el =>
+    el.classList.toggle('active', el === opt));
+}
 document.getElementById('plant-group').addEventListener('click', (e) => {
   const opt = e.target.closest('.plant-opt');
   if (!opt) return;
-  plantMode = opt.dataset.kind;
-  document.querySelectorAll('.plant-opt').forEach(el =>
-    el.classList.toggle('active', el === opt));
+  setPlantMode(opt.dataset.kind);
 });
 
 // === PALETTE (active timbre role for new voices) ===
