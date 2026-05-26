@@ -1647,13 +1647,12 @@ function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   // Retrigger if already held — release old, start fresh
   if (activeLiveNotes.has(midi)) liveNoteOff(midi);
-  // Hardware MIDI keyboards have labelled keys — if the user pressed F#,
-  // they chose F#. Scale-snapping is for abstract inputs (QWERTY rows,
-  // on-screen piano) where guardrails protects new users from off-key
-  // mash. Without this, polyphony collapses when multiple adjacent keys
-  // snap to the same scale degree.
-  const shouldSnap = guardrails && source !== 'midi';
-  const targetMidi = shouldSnap ? snapToScale(midi) : midi;
+  // Live input never snaps to scale, regardless of source. The user
+  // pressed a specific key (MIDI keyboard / QWERTY / on-screen piano)
+  // — they get that pitch. Guardrails snap is reserved for "planting
+  // on the canvas": recording a phrase compresses it onto the scale
+  // grid before becoming a seed pattern.
+  const targetMidi = midi;
   const freq = freqFromMidi(targetMidi);
   const osc = audioCtx.createOscillator();
   const env = audioCtx.createGain();
@@ -1845,7 +1844,6 @@ function noteOff(midi) {
   }
   liveNoteOff(midi);
   highlightPianoKey(midi, false);
-  if (guardrails) highlightPianoKey(snapToScale(midi), false);
 }
 
 // Auto-finish recording when there's been no activity AND no keys held.
