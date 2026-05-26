@@ -277,19 +277,48 @@ export function setActiveRole(role) {
 // playable and gives more variety per encoder turn.
 const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice', 'kick', 'snare', 'hat'];
 let liveTimbreIdx = 1;  // melody
-export let liveTimbre = TIMBRE_ROLES[LIVE_TIMBRE_CYCLE[liveTimbreIdx]].generate();
-liveTimbre.role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
 
-// Roll the live keyboard timbre to the next pitched role in the cycle
-// and re-roll a fresh harmonic profile via that role's generate(). The
-// MiniLab 3 main rotary encoder calls this each detent; the palette
-// UI in main.js is the canonical place to reflect the change visually.
-export function rollLiveTimbre(direction = 1) {
-  liveTimbreIdx = (liveTimbreIdx + direction + LIVE_TIMBRE_CYCLE.length) % LIVE_TIMBRE_CYCLE.length;
-  const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
-  liveTimbre = TIMBRE_ROLES[role].generate();
-  liveTimbre.role = role;
+// Cache one patch per role so twisting the encoder swaps between
+// previously-heard sounds rather than rolling a fresh random patch
+// every detent (which made the device feel chaotic — every twist
+// produced a different sound). Click the encoder to re-roll the
+// current role's patch with a new random variant.
+const liveTimbreCache = {};
+function ensureRolePatch(role) {
+  if (!liveTimbreCache[role]) {
+    const gen = TIMBRE_ROLES[role].generate();
+    gen.role = role;
+    liveTimbreCache[role] = gen;
+  }
+  return liveTimbreCache[role];
+}
+
+export let liveTimbre = ensureRolePatch(LIVE_TIMBRE_CYCLE[liveTimbreIdx]);
+
+function paintActiveRole(role) {
   activeRole = role;
   document.querySelectorAll('.palette-item').forEach(el =>
     el.classList.toggle('active', el.dataset.role === role));
+}
+
+// Twist the encoder: scroll to the next/previous role in the cycle
+// and swap to that role's cached patch. No new random generation —
+// the same role gives the same sound every time you scroll back to it.
+export function rollLiveTimbre(direction = 1) {
+  liveTimbreIdx = (liveTimbreIdx + direction + LIVE_TIMBRE_CYCLE.length) % LIVE_TIMBRE_CYCLE.length;
+  const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
+  liveTimbre = ensureRolePatch(role);
+  paintActiveRole(role);
+}
+
+// Click the encoder (or any "commit" gesture): re-roll the current
+// role's patch with a fresh random variant. Updates the cache so
+// the new sound is what you hear next time you scroll back here.
+export function regenerateLiveTimbre() {
+  const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
+  const gen = TIMBRE_ROLES[role].generate();
+  gen.role = role;
+  liveTimbreCache[role] = gen;
+  liveTimbre = gen;
+  paintActiveRole(role);
 }

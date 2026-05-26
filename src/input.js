@@ -11,7 +11,7 @@ import {
   audioCtx, masterGain, initAudio,
 } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
-import { liveTimbre, rollLiveTimbre } from './timbres.js';
+import { liveTimbre, rollLiveTimbre, regenerateLiveTimbre } from './timbres.js';
 import { state, activeLiveNotes, releasingNotes, sustainedMidis } from './state.js';
 import { rescheduleRecordingAutoFinish } from './recording.js';
 import {
@@ -395,11 +395,20 @@ function handleMIDIMessage(evt) {
     const cc = data[1], v = data[2];
     if (cc === 64) { setSustainPedal(v >= 64); return; }
     // MiniLab 3 main rotary (relative-1 encoding): 65-67 = +1..+3,
-    // 61-63 = -3..-1, 64 = no change. Roll the live timbre to the
-    // next pitched role and regenerate a fresh harmonic profile.
+    // 61-63 = -3..-1, 64 = no change. Twist scrolls through pitched
+    // roles; the patch for each role is cached and reused so
+    // scrolling doesn't continuously re-generate random sounds.
     if (cc === 28) {
       if (v > 64) rollLiveTimbre(1);
       else if (v < 64) rollLiveTimbre(-1);
+      return;
+    }
+    // Display encoder CLICK (CC 118, push = 127). Regenerates the
+    // CURRENT role's patch with a fresh random variant. Twist to
+    // browse, click to re-roll — keeps the encoder turn sonically
+    // stable while still giving instant access to new variants.
+    if (cc === 118 && v >= 64) {
+      regenerateLiveTimbre();
       return;
     }
     // The 8 panel encoders and 4 faders route through controls.js,
