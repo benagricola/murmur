@@ -1,64 +1,24 @@
 'use strict';
 
+import {
+  RHYTHM_OPTIONS, LENGTH_OPTIONS, SPHERE_OPTIONS, RIPPLE_DELAY_OPTIONS,
+  CLOUD_SIZE_OPTIONS, SWING_OPTIONS, POLY_RATIOS,
+  nearestOptionIdx,
+  SCALE_PITCH_CLASSES, SCALE_ROOT_PC, snapToScale, inScale,
+  freqFromMidi, midiFromFreq, NOTE_NAMES, noteName,
+  SEED_COLORS, WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR,
+  makeHarmonicsArr, shuffleArr, pickWeighted,
+} from './constants.js';
+
 //
 // =========================================================================
-//  CONSTANTS & MUSICAL UNITS
-//  Tempo is mutable. Options store FRACTIONS of a bar; .ms is recomputed
-//  whenever BPM changes so existing seeds reschedule musically correctly.
+//  TEMPO (mutable). Options' `.ms` is recomputed via setBPM so existing
+//  seeds reschedule musically correctly when tempo changes.
 // =========================================================================
 //
 let BPM = 96;
 let BEAT_MS = 60000 / BPM;
 let BAR_MS = BEAT_MS * 4;
-
-const RHYTHM_OPTIONS = [
-  { label: '1/16',  frac: 1/16, ms: 0 },
-  { label: '1/8',   frac: 1/8,  ms: 0 },
-  { label: '1/4',   frac: 1/4,  ms: 0 },
-  { label: '3/8',   frac: 3/8,  ms: 0 },
-  { label: '1/2',   frac: 1/2,  ms: 0 },
-  { label: '1 bar', frac: 1,    ms: 0 },
-  { label: '2 bar', frac: 2,    ms: 0 },
-];
-const LENGTH_OPTIONS = [
-  { label: '1/16',  frac: 1/16, ms: 0 },
-  { label: '1/8',   frac: 1/8,  ms: 0 },
-  { label: '1/4',   frac: 1/4,  ms: 0 },
-  { label: '1/2',   frac: 1/2,  ms: 0 },
-  { label: '1 bar', frac: 1,    ms: 0 },
-  { label: '2 bar', frac: 2,    ms: 0 },
-];
-const SPHERE_OPTIONS = [
-  { label: 'tight', r: 110 },
-  { label: 'med',   r: 180 },
-  { label: 'wide',  r: 260 },
-  { label: 'huge',  r: 360 },
-];
-const RIPPLE_DELAY_OPTIONS = [
-  { label: '1/16',  frac: 1/16,  ms: 0 },
-  { label: '1/8',   frac: 1/8,   ms: 0 },
-  { label: '3/16',  frac: 3/16,  ms: 0 },
-  { label: '1/4',   frac: 1/4,   ms: 0 },
-  { label: '3/8',   frac: 3/8,   ms: 0 },
-];
-const CLOUD_SIZE_OPTIONS = [
-  { label: 'room', sec: 0.7 },
-  { label: 'hall', sec: 1.8 },
-  { label: 'cave', sec: 3.2 },
-  { label: 'space', sec: 5.0 },
-];
-const SWING_OPTIONS = [
-  { label: 'straight', val: 0.50 },
-  { label: 'light',    val: 0.58 },
-  { label: 'med',      val: 0.67 },
-  { label: 'hard',     val: 0.75 },
-];
-const POLY_RATIOS = [
-  { label: '3:2', factor: 2/3 },  // 3 hits in time of 2 (faster)
-  { label: '4:3', factor: 3/4 },  // 4 hits in time of 3 (faster)
-  { label: '5:4', factor: 4/5 },  // 5 hits in time of 4 (faster)
-  { label: '7:8', factor: 8/7 },  // 7 hits in time of 8 (slightly slower)
-];
 
 function recomputeOptionsMs() {
   for (const o of RHYTHM_OPTIONS) o.ms = o.frac * BAR_MS;
@@ -75,7 +35,6 @@ function setBPM(newBPM) {
   BEAT_MS = 60000 / BPM;
   BAR_MS = BEAT_MS * 4;
   recomputeOptionsMs();
-  // Rescale every seed's stored intervalMs and decay (preserve their bar-fraction)
   for (const s of seeds) {
     if (s.intervalMs) s.intervalMs = (s.intervalMs / oldBar) * BAR_MS;
     if (s.decay)      s.decay      = (s.decay      / oldBar) * BAR_MS;
@@ -83,42 +42,9 @@ function setBPM(newBPM) {
     if (s.delayMs)    s.delayMs    = (s.delayMs    / oldBar) * BAR_MS;
     s.nextTrigger = 0;  // re-phase on next schedule pass
   }
-  // Update display
   const el = document.getElementById('tempo-val');
   if (el) el.textContent = BPM + ' bpm';
 }
-
-function nearestOptionIdx(options, ms) {
-  let best = 0, bestDiff = Infinity;
-  for (let i = 0; i < options.length; i++) {
-    const d = Math.abs(options[i].ms - ms);
-    if (d < bestDiff) { bestDiff = d; best = i; }
-  }
-  return best;
-}
-
-// G minor pentatonic
-const SCALE_PITCH_CLASSES = [0, 3, 5, 7, 10];
-const SCALE_ROOT_PC = 7;
-function snapToScale(midi) {
-  const rel = midi - SCALE_ROOT_PC;
-  const oct = Math.floor(rel / 12);
-  const mod = ((rel % 12) + 12) % 12;
-  let best = SCALE_PITCH_CLASSES[0], bestDist = 12;
-  for (const s of SCALE_PITCH_CLASSES) {
-    const d = Math.min(Math.abs(mod - s), 12 - Math.abs(mod - s));
-    if (d < bestDist) { bestDist = d; best = s; }
-  }
-  return SCALE_ROOT_PC + oct * 12 + best;
-}
-function inScale(midi) {
-  const mod = ((midi - SCALE_ROOT_PC) % 12 + 12) % 12;
-  return SCALE_PITCH_CLASSES.includes(mod);
-}
-function freqFromMidi(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-function midiFromFreq(f) { return Math.round(69 + 12 * Math.log2(f / 440)); }
-const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-function noteName(midi) { return NOTE_NAMES[midi % 12] + Math.floor(midi / 12 - 1); }
 
 //
 // =========================================================================
@@ -128,29 +54,6 @@ function noteName(midi) { return NOTE_NAMES[midi % 12] + Math.floor(midi / 12 - 
 //  variation in the same family.
 // =========================================================================
 //
-function makeHarmonicsArr() { return new Array(12).fill(0); }
-function shuffleArr(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// Weighted random pick — `weights` is an object like { foo: 2, bar: 1 }.
-// `foo` will be twice as likely as `bar`.
-function pickWeighted(weights) {
-  let total = 0;
-  for (const k in weights) total += weights[k];
-  let r = Math.random() * total;
-  for (const k in weights) {
-    r -= weights[k];
-    if (r <= 0) return k;
-  }
-  return Object.keys(weights)[0];
-}
-
 // Pack a generator's output into the legacy + patch shape. Used by every
 // role generator so the call sites stay consistent.
 function packRole({ patch, intervalMs, fundamentalHz, synthesisModel }) {
@@ -437,11 +340,6 @@ let nextSeedId = 1;
 let selectedSeedId = null;
 let plantMode = 'voice';
 
-const SEED_COLORS = ['#5fd2e8', '#e85a6f', '#7ddfb3', '#ffd166', '#b393d6'];
-const WEAVE_COLOR = '#ffa94d';
-const RIPPLE_COLOR = '#e8a8c8';
-const CLOUD_COLOR = '#d0d8e8';
-const POLY_COLOR = '#9be9a8';
 function seedById(id) { return seeds.find(s => s.id === id); }
 
 //
