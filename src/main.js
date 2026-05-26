@@ -16,6 +16,12 @@ import {
   generateKick, generateSnare, generateHihat,
   generateBass, generateMelody, generateVoice,
 } from './timbres.js';
+import {
+  audioCtx, masterGain, supportsPeriodicWave, NUM_HARMONICS,
+  showAudioStatus, withTimeout, tryCreateContext, ensureAudio, initAudio,
+  setMasterVol, buildPeriodicWave, setOscWave, createNoiseBuffer,
+  onContextCreated,
+} from './audio/context.js';
 
 // High-level tempo change — updates state via setTempo, then rescales
 // each seed's bar-fraction-derived timings (intervalMs, decay, attack,
@@ -61,96 +67,22 @@ function seedById(id) { return seeds.find(s => s.id === id); }
 
 //
 // =========================================================================
-//  AUDIO
+//  AUDIO orchestration left in main.js: playback state + first-interaction
+//  bootstrap. The rest of the audio surface lives in ./audio/.
 // =========================================================================
 //
-let audioCtx = null;
-let masterGain = null;
 let isPlaying = false;
 let playbackStartTime = 0;
-let supportsPeriodicWave = false;
 
-function showAudioStatus(text, kind = '') {
-  const el = document.getElementById('audio-status');
-  if (!el) return;
-  el.textContent = 'audio: ' + text;
-  el.classList.remove('error', 'ok');
-  if (kind === 'error') el.classList.add('error');
-  else if (kind === 'ok') el.classList.add('ok');
-}
+// When the AudioContext is first created, attach modifier audio chains
+// for any seeds that were planted before audio came online (the demo
+// composition lands on the canvas before the user has interacted).
+onContextCreated(() => {
+  for (const s of seeds) setupModifierChain(s);
+});
 
-// Race a promise against a timer so a hung Promise can't freeze our flow.
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise.then(v => ({ value: v }), e => ({ error: e })),
-    new Promise(resolve => setTimeout(() => resolve({ timeout: true, label }), ms)),
-  ]);
-}
-
-// Synchronously create the AudioContext. Safe to call multiple times.
-// In some browsers/iframes this only succeeds inside a user-gesture handler,
-// so we both try it at load time AND on the first interaction.
-function tryCreateContext() {
-  if (audioCtx) return true;
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) { showAudioStatus('no web audio api', 'error'); return false; }
-    audioCtx = new Ctx();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.35;
-    masterGain.connect(audioCtx.destination);
-    // Detect PeriodicWave support (some older Android WebViews lack it)
-    try {
-      const w = audioCtx.createPeriodicWave(new Float32Array([0, 1, 0]), new Float32Array([0, 0, 0]));
-      const tosc = audioCtx.createOscillator();
-      tosc.setPeriodicWave(w);
-      supportsPeriodicWave = true;
-    } catch (e) {
-      supportsPeriodicWave = false;
-    }
-    // Set up audio chains for any modifiers that were created before audio existed
-    for (const s of seeds) {
-      setupModifierChain(s);
-    }
-    showAudioStatus('ctx ' + audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'));
-    return true;
-  } catch (e) {
-    showAudioStatus('create: ' + (e.message || e), 'error');
-    return false;
-  }
-}
-
-// Ensure audio is created AND resumed. Resume is timeout-guarded so a
-// non-resolving Promise can't lock up the UI. Safe to call from any handler.
-async function ensureAudio() {
-  if (!audioCtx && !tryCreateContext()) return null;
-  if (audioCtx.state === 'suspended') {
-    showAudioStatus('resuming...');
-    const result = await withTimeout(audioCtx.resume(), 1500, 'resume');
-    if (result.timeout) {
-      showAudioStatus('resume timeout · state=' + audioCtx.state, 'error');
-    } else if (result.error) {
-      showAudioStatus('resume err · ' + (result.error.message || ''), 'error');
-    } else {
-      showAudioStatus(audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'),
-                      audioCtx.state === 'running' ? 'ok' : '');
-    }
-  } else {
-    showAudioStatus(audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'),
-                    audioCtx.state === 'running' ? 'ok' : '');
-  }
-  return audioCtx;
-}
-
-// Back-compat alias for callers that still say initAudio
-const initAudio = ensureAudio;
-
-// Try once at script load — many browsers permit this and just create it
-// in suspended state. Having the context exist early avoids gesture-timing
-// issues during user interaction.
-// (Called later, after seeds are populated, so the ripple chain can attach.)
-
-// Also re-attempt on first user interaction in case load-time creation failed
+// Try creating the context on first user gesture so audio is ready by
+// the time the scheduler fires. tryCreateContext is idempotent.
 let firstInteractionHandled = false;
 function handleFirstInteraction() {
   if (firstInteractionHandled) return;
@@ -160,10 +92,6 @@ function handleFirstInteraction() {
 document.addEventListener('pointerdown', handleFirstInteraction, { capture: true });
 document.addEventListener('keydown', handleFirstInteraction, { capture: true });
 document.addEventListener('touchstart', handleFirstInteraction, { capture: true });
-
-function setMasterVol(v) {
-  if (masterGain) masterGain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.05);
-}
 function setupRippleChain(rippleSeed) {
   if (rippleSeed.delayInput) return;
   const input = audioCtx.createGain();
@@ -210,32 +138,6 @@ function setupModifierChain(seed) {
   if (seed.kind !== 'modifier' || !audioCtx) return;
   if (seed.modifierKind === 'ripple') setupRippleChain(seed);
   if (seed.modifierKind === 'cloud') setupCloudChain(seed);
-}
-
-const NUM_HARMONICS = 12;
-function buildPeriodicWave(harmonicAmps) {
-  const len = NUM_HARMONICS + 2;
-  const real = new Float32Array(len);
-  const imag = new Float32Array(len);
-  real[1] = 1.0;
-  for (let i = 0; i < harmonicAmps.length; i++) real[i + 2] = harmonicAmps[i] || 0;
-  return audioCtx.createPeriodicWave(real, imag);
-}
-
-// Apply a harmonic spectrum to an oscillator. If PeriodicWave isn't supported,
-// approximate by picking a standard waveform type based on the harmonic content.
-function setOscWave(osc, harmonicAmps) {
-  if (supportsPeriodicWave) {
-    try {
-      osc.setPeriodicWave(buildPeriodicWave(harmonicAmps));
-      return;
-    } catch (e) { /* fall through */ }
-  }
-  const lower = (harmonicAmps[0] || 0) + (harmonicAmps[1] || 0) + (harmonicAmps[2] || 0);
-  const upper = (harmonicAmps[6] || 0) + (harmonicAmps[7] || 0) + (harmonicAmps[8] || 0) + (harmonicAmps[9] || 0);
-  if (upper > 0.15) osc.type = 'sawtooth';
-  else if (lower > 0.3) osc.type = 'triangle';
-  else osc.type = 'sine';
 }
 
 // =========================================================================
@@ -535,23 +437,6 @@ function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     detune: (cents, t) => { for (const d of detunes) d(cents, t); },
     output: env,
   };
-}
-
-// === DRUM SYNTHESIS ===
-// Procedural drum sounds, not additive. Each uses the appropriate node graph:
-// kick = sine with pitch sweep; snare = triangle + bandpass noise; hat = HP noise.
-let _noiseBufferCache = null;
-function createNoiseBuffer(durationSec) {
-  durationSec = Math.max(0.05, durationSec);
-  if (_noiseBufferCache && _noiseBufferCache.length / audioCtx.sampleRate >= durationSec - 0.001) {
-    return _noiseBufferCache;
-  }
-  const length = Math.floor(audioCtx.sampleRate * Math.max(0.3, durationSec));
-  const buf = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
-  _noiseBufferCache = buf;
-  return buf;
 }
 
 // Route a node into any modifier audio chains capturing this seed.
