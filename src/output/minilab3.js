@@ -29,19 +29,26 @@ const FOOTER = [0xF7];
 // because the device ignores SysEx with the wrong manufacturer ID.
 let midiOuts = [];
 
-// Bind to every MIDI output whose name suggests it belongs to a
-// MiniLab (case-insensitive substring match) and run the DAW
-// handshake. `outputs` is the array maintained in input.js — passed
-// in so this module doesn't have to import upward (cycle).
+// Bind to the MIDI output the MiniLab uses for LED + screen SysEx.
+// Per the Ableton remote-script implementation: in DAW mode, only
+// the device's "DAW virtual" port accepts LED/screen writes — on
+// Linux it's named "ALV" (Analog Lab Virtual), on Windows "MIDIIN2",
+// on Mac "MiniLab 3 DAW". The main "MiniLab 3 MIDI" port carries
+// notes / CCs / pitch-bend but silently drops LED SysEx.
+//
+// Pick the DAW port specifically. Fall back to spraying every
+// MiniLab-named port if name-matching fails (different firmware /
+// OS might have different conventions).
 export function connectMinilab(outputs) {
-  midiOuts = (outputs || []).filter(o => /minilab/i.test(o.name || ''));
-  if (midiOuts.length === 0 && outputs && outputs.length > 0) {
-    // No port name matched — fall back to whatever's first so test
-    // hardware with unusual names still gets the handshake.
-    midiOuts = [outputs[0]];
-  }
+  const allMinilab = (outputs || []).filter(o => /minilab/i.test(o.name || ''));
+  const dawPort = allMinilab.find(o => /\b(alv|midiin2|daw)\b/i.test(o.name || ''));
+  if (dawPort) midiOuts = [dawPort];
+  else if (allMinilab.length > 0) midiOuts = allMinilab;
+  else if (outputs && outputs.length > 0) midiOuts = [outputs[0]];
+  else midiOuts = [];
   if (midiOuts.length === 0) return false;
-  console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name));
+  console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name),
+    dawPort ? '(DAW port matched)' : '(no DAW port found, spraying all)');
   // Universal Device Inquiry — standard MIDI request that any
   // compliant device should answer. Sent BEFORE the Arturia-specific
   // handshake so we can capture firmware version even if the device
