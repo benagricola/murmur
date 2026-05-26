@@ -23,17 +23,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble site
-        run: |
-          mkdir -p _site
-          cp murmur.html _site/index.html
-          cp murmur.html _site/murmur.html
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install esbuild
+        run: go install github.com/evanw/esbuild/cmd/esbuild@latest
+
+      - name: Build
+        run: make build
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: dist
 
       - id: deployment
         uses: actions/deploy-pages@v4

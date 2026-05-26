@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>murmur — prototype (keyboard)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="app">
+
+  <header class="top-bar">
+    <div class="brand">murmur</div>
+    <div class="controls">
+      <button class="btn primary" id="play-btn">▶ start</button>
+      <button class="btn" id="rec-btn">● record</button>
+      <div class="plant-group" id="plant-group">
+        <div class="plant-opt active" data-kind="voice"><span class="dot"></span>voice</div>
+        <div class="plant-opt" data-kind="weave"><span class="dot"></span>weave</div>
+        <div class="plant-opt" data-kind="ripple"><span class="dot"></span>ripple</div>
+        <div class="plant-opt" data-kind="cloud"><span class="dot"></span>cloud</div>
+        <div class="plant-opt" data-kind="poly"><span class="dot"></span>poly</div>
+        <div class="plant-divider"></div>
+        <div class="plant-opt event-opt" data-kind="drop"><span class="dot"></span>drop</div>
+        <div class="plant-opt event-opt" data-kind="muffle"><span class="dot"></span>muffle</div>
+        <div class="plant-opt event-opt" data-kind="thin"><span class="dot"></span>thin</div>
+        <div class="plant-opt event-opt" data-kind="rise"><span class="dot"></span>rise</div>
+        <div class="plant-opt event-opt" data-kind="fade"><span class="dot"></span>fade</div>
+      </div>
+      <div class="palette" id="palette"></div>
+      <div class="midi-status" title="MIDI device status">
+        <span class="midi-led" id="midi-led"></span>
+        <span id="midi-label">no midi</span>
+      </div>
+      <div class="guard-toggle" id="guard-toggle" title="Guardrails: keep notes in key, on grid">
+        <span>guardrails</span>
+        <span class="guard-pill on" id="guard-pill"></span>
+      </div>
+      <div class="vol-wrap"><span>vol</span><input type="range" class="std" id="vol" min="0" max="100" value="35"></div>
+      <div class="vol-wrap"><span>tempo</span><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span id="tempo-val">120 bpm</span></div>
+      <button class="btn" id="snap-btn">📷</button>
+      <button class="btn" id="clear-btn" title="Clear canvas (a snapshot is taken first so you can revert)">clear</button>
+      <button class="btn" id="midi-log-btn" title="Download the captured MIDI event log as JSON">midi log</button>
+    </div>
+  </header>
+
+  <div class="canvas-wrap" id="canvas-wrap">
+    <svg class="canvas" id="canvas" viewBox="0 0 1400 800" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="halo-blur" x="-100%" y="-100%" width="300%" height="300%">
+          <feGaussianBlur stdDeviation="18"/>
+        </filter>
+        <filter id="halo-blur-small" x="-100%" y="-100%" width="300%" height="300%">
+          <feGaussianBlur stdDeviation="10"/>
+        </filter>
+        <radialGradient id="sphere-weave-grad">
+          <stop offset="0%"  stop-color="#ffa94d" stop-opacity="0.10"/>
+          <stop offset="70%" stop-color="#ffa94d" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#ffa94d" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sphere-ripple-grad">
+          <stop offset="0%"  stop-color="#e8a8c8" stop-opacity="0.10"/>
+          <stop offset="70%" stop-color="#e8a8c8" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#e8a8c8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sphere-cloud-grad">
+          <stop offset="0%"  stop-color="#d0d8e8" stop-opacity="0.10"/>
+          <stop offset="70%" stop-color="#d0d8e8" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#d0d8e8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sphere-poly-grad">
+          <stop offset="0%"  stop-color="#9be9a8" stop-opacity="0.10"/>
+          <stop offset="70%" stop-color="#9be9a8" stop-opacity="0.04"/>
+          <stop offset="100%" stop-color="#9be9a8" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <g id="spheres-layer"></g>
+      <g id="tethers-layer"></g>
+      <g id="events-layer"></g>
+      <g id="seeds-layer"></g>
+      <g id="tap-markers"></g>
+    </svg>
+    <div class="hint" id="hint">click to plant · play keys to make notes · press record then play a phrase to plant a melody</div>
+  </div>
+
+  <aside class="inspector" id="inspector">
+    <button class="insp-close" id="insp-close">×</button>
+    <div class="insp-title" id="insp-title">seed</div>
+    <div class="insp-sub" id="insp-sub">voice</div>
+
+    <div class="captured-info" id="captured-info" style="display: none;"></div>
+
+    <div class="picker-row" id="preset-row">
+      <label>preset</label>
+      <div class="picker" id="preset-picker"></div>
+    </div>
+    <button class="regen-btn" id="regen-btn">🎲 regenerate sound</button>
+
+    <div class="pitch-row" id="pitch-row">
+      <label>pitch</label>
+      <input type="range" class="std" id="pitch-slider" min="24" max="96" step="1" value="55">
+      <span class="pitch-val" id="pitch-val">A3</span>
+    </div>
+
+    <div class="picker-row" id="rhythm-row">
+      <label>rhythm</label>
+      <div class="picker" id="rhythm-picker"></div>
+    </div>
+
+    <div class="picker-row" id="length-row">
+      <label>length</label>
+      <div class="picker" id="length-picker"></div>
+    </div>
+
+    <div class="toggle-row" id="quantize-row">
+      <div class="toggle" id="quantize-toggle"></div>
+      <span>quantize to grid</span>
+    </div>
+
+    <div class="toggle-row" id="mute-row">
+      <div class="toggle" id="mute-toggle"></div>
+      <span>muted</span>
+    </div>
+
+    <div class="section" id="harmonic-section">
+      <div class="section-label"><span>harmonics</span><span>drag bars</span></div>
+      <div class="harmonic-editor" id="harmonic-editor"></div>
+      <div class="h-numbers" id="h-numbers"></div>
+    </div>
+
+    <div class="section" id="pattern-section">
+      <div class="section-label"><span>melody</span><span>drag dots</span></div>
+      <svg class="pattern-editor" id="pattern-editor" viewBox="0 0 276 100" preserveAspectRatio="none"></svg>
+      <div class="pattern-meta">
+        <span id="pattern-len-info">4 steps</span>
+        <span id="pattern-loop-info">5.0s loop</span>
+      </div>
+    </div>
+
+    <div class="picker-row" id="sphere-row" style="display: none;">
+      <label>reach</label>
+      <div class="picker" id="sphere-picker"></div>
+    </div>
+
+    <button class="btn delete-btn" id="delete-btn">remove this seed</button>
+  </aside>
+
+  <div class="piano-bar">
+    <div class="piano-info">
+      <div id="piano-label">play with mouse or<br>keyboard a/s/d/f/g/h/j</div>
+    </div>
+    <div class="piano" id="piano"></div>
+  </div>
+
+  <footer class="timeline">
+    <div class="tl-label">history</div>
+    <div class="tl-strip" id="tl-strip"></div>
+  </footer>
+
+</div>
+
+<div class="audio-status" id="audio-status">audio: not started</div>
+
+<script src="./app.js"></script>
+
+</body>
+</html>
