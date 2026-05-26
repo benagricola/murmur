@@ -19,6 +19,7 @@ import {
 import { setStepHighlightHandler, playNoteAt } from './scheduler.js';
 import { refreshSelectionLights, paintScreen } from './output/minilab3.js';
 import { ensureAudio } from './audio/context.js';
+import { labelFor, categoryLabel } from './labels.js';
 
 let takeSnapshotFn = (label) => {};
 let reevaluateAllCapturesFn = () => {};
@@ -66,7 +67,9 @@ export function selectSeed(id) {
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
   document.getElementById('insp-sub').textContent =
-    seed.kind === 'modifier' ? `modifier · ${seed.modifierKind}` : `voice${seed.role ? ' · ' + seed.role : ''}`;
+    seed.kind === 'modifier'
+      ? `${categoryLabel('modifier')} · ${labelFor(seed.modifierKind)}`
+      : `${categoryLabel('voice')}${seed.role ? ' · ' + seed.role : ''}`;
 
   const presetRow = document.getElementById('preset-row');
   const regenBtn = document.getElementById('regen-btn');

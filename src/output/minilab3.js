@@ -15,6 +15,7 @@ import { state, seeds, seedById } from '../state.js';
 import { TIMBRE_ROLES, activeRole } from '../timbres.js';
 import { BPM } from '../tempo.js';
 import { noteName, freqFromMidi, midiFromFreq } from '../constants.js';
+import { labelFor } from '../labels.js';
 
 // SysEx header constants. The `42` at the end is the MiniLab 3
 // product byte and is fixed for this device family.
@@ -235,13 +236,13 @@ export function paintScreen() {
     line1 = (seed.label || seed.role || 'seed').slice(0, 10);
     if (seed.kind === 'voice') {
       const noteLabel = noteName(midiFromFreq(seed.fundamental));
-      line2 = `${seed.role || 'voice'} ${noteLabel} ${BPM}bpm`;
+      line2 = `${seed.role || 'seed'} ${noteLabel} ${BPM}bpm`;
     } else {
-      line2 = `${seed.modifierKind || 'mod'} ${BPM}bpm`;
+      line2 = `${labelFor(seed.modifierKind || 'aura')} ${BPM}bpm`;
     }
   } else {
     line1 = 'murmur';
-    line2 = `${state.plantMode} ${BPM}bpm ${state.guardrails ? 'g' : '·'}`;
+    line2 = `${labelFor(state.plantMode)} ${BPM}bpm ${state.guardrails ? 'g' : '·'}`;
   }
   // Non-transient (01) so the screen stays put. play / record / arp
   // pictograms reflect current transport.

@@ -21,13 +21,14 @@ import {
 } from './seeds.js';
 import { setupModifierChain } from './audio/chains.js';
 import {
-  BOMB_KINDS, SWEEP_KINDS, spawnBomb, spawnSweep,
+  PULSE_KINDS, SWEEP_KINDS, spawnPulse, spawnSweep,
 } from './audio/events.js';
 import { initAudio, audioCtx } from './audio/context.js';
 import { selectSeed } from './inspector.js';
 import { takeSnapshot } from './snapshots.js';
 import { setSetPlantModeFn } from './input.js';
 import { refreshPadLights } from './output/minilab3.js';
+import { labelFor } from './labels.js';
 
 export function canvasCoords(evt) {
   const ctm = canvasEl.getScreenCTM();
@@ -87,8 +88,8 @@ function addTapMarker(x, y) {
 
 function startTap(c) {
   // Bomb modes spawn a one-shot event at the tap point
-  if (BOMB_KINDS[state.plantMode]) {
-    spawnBomb(c.x, c.y, state.plantMode);
+  if (PULSE_KINDS[state.plantMode]) {
+    spawnPulse(c.x, c.y, state.plantMode);
     takeSnapshot('fired ' + state.plantMode);
     return;
   }
@@ -215,7 +216,7 @@ function plantModifierAt(c) {
   }
   syncRenderedSeeds();
   selectSeed(seed.id);
-  takeSnapshot('planted ' + modKind);
+  takeSnapshot('planted ' + labelFor(modKind));
 }
 
 canvasEl.addEventListener('pointerdown', (evt) => {

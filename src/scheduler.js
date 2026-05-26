@@ -4,7 +4,7 @@
 //   scheduleAhead (setInterval 25ms) — schedules audio events 100ms
 //     ahead of currentTime. Reads seed timing, swing, polyrhythm.
 //   visualTick (requestAnimationFrame) — pulses seed nodes, renders
-//     chord outlines, advances bomb / sweep lifecycle, paints them.
+//     chord outlines, advances pulse / sweep lifecycle, paints them.
 //
 // The two loops are decoupled at the rate level (audio uses ctx time,
 // visuals use perf.now) but both iterate the same seed list.
@@ -18,7 +18,7 @@ import { audioCtx } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
 import { patchFromLegacySeed } from './audio/patches.js';
 import {
-  routeFinalOutput, BOMB_KINDS, SWEEP_KINDS, bombCurrentRadius,
+  routeFinalOutput, PULSE_KINDS, SWEEP_KINDS, pulseCurrentRadius,
 } from './audio/events.js';
 import { seeds, activeEvents, state, seedById } from './state.js';
 import {
@@ -216,10 +216,10 @@ function updateEvents() {
   const tnow = performance.now();
   for (let i = activeEvents.length - 1; i >= 0; i--) {
     const ev = activeEvents[i];
-    if (ev.type === 'bomb') {
+    if (ev.type === 'pulse') {
       if (ev.state === 'expanding') {
         const elapsed = tnow - ev.startTimeMs;
-        const r = bombCurrentRadius(ev);
+        const r = pulseCurrentRadius(ev);
         for (const seed of seeds) {
           if (seed.kind !== 'voice') continue;
           if (Math.hypot(seed.cx - ev.cx, seed.cy - ev.cy) <= r) {
@@ -280,9 +280,9 @@ function renderEvents() {
   eventsLayer.innerHTML = '';
   const tnow = performance.now();
   for (const ev of activeEvents) {
-    if (ev.type === 'bomb') {
+    if (ev.type === 'pulse') {
       if (ev.state === 'expanding') {
-        const r = bombCurrentRadius(ev);
+        const r = pulseCurrentRadius(ev);
         const fill = document.createElementNS(SVGNS, 'circle');
         fill.setAttribute('cx', ev.cx); fill.setAttribute('cy', ev.cy);
         fill.setAttribute('r', r);
@@ -368,7 +368,7 @@ function renderEvents() {
     }
   }
 
-  // Echo halos on seeds (shared between bomb and sweep effects)
+  // Echo halos on seeds (shared between pulse and sweep effects)
   for (const seed of seeds) {
     if (seed.kind !== 'voice') continue;
     if (!seed._echoUntil || tnow > seed._echoUntil) continue;
