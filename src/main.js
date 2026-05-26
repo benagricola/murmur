@@ -10,32 +10,19 @@ import {
   makeHarmonicsArr, shuffleArr, pickWeighted,
 } from './constants.js';
 import { patchFromLegacySeed, harmonicsForPatch } from './audio/patches.js';
+import { BPM, BEAT_MS, BAR_MS, setTempo } from './tempo.js';
+import {
+  TIMBRE_ROLES, activeRole, setActiveRole, liveTimbre, rollLiveTimbre,
+  generateKick, generateSnare, generateHihat,
+  generateBass, generateMelody, generateVoice,
+} from './timbres.js';
 
-//
-// =========================================================================
-//  TEMPO (mutable). Options' `.ms` is recomputed via setBPM so existing
-//  seeds reschedule musically correctly when tempo changes.
-// =========================================================================
-//
-let BPM = 96;
-let BEAT_MS = 60000 / BPM;
-let BAR_MS = BEAT_MS * 4;
-
-function recomputeOptionsMs() {
-  for (const o of RHYTHM_OPTIONS) o.ms = o.frac * BAR_MS;
-  for (const o of LENGTH_OPTIONS) o.ms = o.frac * BAR_MS;
-  for (const o of RIPPLE_DELAY_OPTIONS) o.ms = o.frac * BAR_MS;
-}
-recomputeOptionsMs();
-
-// Re-snap all seed intervals/decays to preserve musical relationships
+// High-level tempo change — updates state via setTempo, then rescales
+// each seed's bar-fraction-derived timings (intervalMs, decay, attack,
+// delay) so the music stays musically aligned across tempo changes,
+// and refreshes the on-screen BPM readout.
 function setBPM(newBPM) {
-  newBPM = Math.max(40, Math.min(220, newBPM));
-  const oldBar = BAR_MS;
-  BPM = newBPM;
-  BEAT_MS = 60000 / BPM;
-  BAR_MS = BEAT_MS * 4;
-  recomputeOptionsMs();
+  const oldBar = setTempo(newBPM);
   for (const s of seeds) {
     if (s.intervalMs) s.intervalMs = (s.intervalMs / oldBar) * BAR_MS;
     if (s.decay)      s.decay      = (s.decay      / oldBar) * BAR_MS;
@@ -55,277 +42,6 @@ function setBPM(newBPM) {
 //  variation in the same family.
 // =========================================================================
 //
-// Pack a generator's output into the legacy + patch shape. Used by every
-// role generator so the call sites stay consistent.
-function packRole({ patch, intervalMs, fundamentalHz, synthesisModel }) {
-  const env = patch.envelope || { attackMs: 8, releaseMs: 400 };
-  return {
-    harmonics: harmonicsForPatch(patch),
-    decay: env.releaseMs,
-    attackMs: env.attackMs,
-    intervalMs,
-    fundamentalHz,
-    synthesisModel,
-    patch,
-  };
-}
-
-function generateKick() {
-  return packRole({
-    patch: {
-      layers: [{ voice: 'kick', gain: 1, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 200 },
-      category: 'drum',
-    },
-    intervalMs: BAR_MS / 2,
-    fundamentalHz: 55 + Math.random() * 18,
-    synthesisModel: 'kick',
-  });
-}
-
-function generateSnare() {
-  return packRole({
-    patch: {
-      layers: [{ voice: 'snare', gain: 1, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 150 },
-      category: 'drum',
-    },
-    intervalMs: BAR_MS / 2,
-    fundamentalHz: 180 + Math.random() * 40,
-    synthesisModel: 'snare',
-  });
-}
-
-function generateHihat() {
-  return packRole({
-    patch: {
-      layers: [{ voice: 'hihat', gain: 1, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 80 },
-      category: 'drum',
-    },
-    intervalMs: BAR_MS / 8,
-    fundamentalHz: 800 + Math.random() * 400,
-    synthesisModel: 'hihat',
-  });
-}
-
-// === Generative complexity ===
-// Each tonal role rolls a `complexity` per call. Low complexity = one
-// punchy layer, default params. Higher complexity adds secondary layers
-// (a touch of FM bell, a body harmonic, a wisp of breath noise). The
-// roll happens per generate() call so the 🎲 button and main encoder
-// give a mix of simple and rich sounds without the user designing them.
-
-function generateBass() {
-  const complexity = Math.random();
-  const baseVoice = pickWeighted({ subtractive: 2.0, fm: 1.2, additive: 0.8 });
-  const layers = [];
-  if (baseVoice === 'subtractive') {
-    layers.push({
-      voice: 'subtractive',
-      gain: 0.75 + Math.random() * 0.15,
-      params: {
-        wave: Math.random() < 0.7 ? 'sawtooth' : 'square',
-        filterStartHz: 800 + Math.random() * 2400,
-        filterEndHz: 120 + Math.random() * 180,
-        filterDecayMs: 250 + Math.random() * 400,
-        Q: 3 + Math.random() * 7,
-      },
-    });
-  } else if (baseVoice === 'fm') {
-    layers.push({
-      voice: 'fm',
-      gain: 0.6 + Math.random() * 0.15,
-      params: {
-        ratio: [0.5, 1, 2][Math.floor(Math.random() * 3)],
-        modIndexStart: 1.5 + Math.random() * 3,
-        modIndexEnd: 0.2 + Math.random() * 0.5,
-        modDecayMs: 200 + Math.random() * 400,
-      },
-    });
-  } else {
-    const h = makeHarmonicsArr();
-    h[0] = 0.42 + Math.random() * 0.12;
-    h[1] = 0.16 + Math.random() * 0.08;
-    h[2] = 0.05 + Math.random() * 0.05;
-    layers.push({ voice: 'additive', gain: 0.7, params: { harmonics: h } });
-  }
-  if (complexity > 0.55) {
-    if (Math.random() < 0.6) {
-      layers.push({
-        voice: 'fm', gain: 0.10 + Math.random() * 0.12,
-        params: { ratio: 3, modIndexStart: 0.5, modIndexEnd: 0.1, modDecayMs: 200 },
-      });
-    } else {
-      const h2 = makeHarmonicsArr();
-      h2[0] = 0.3; h2[1] = 0.15;
-      layers.push({ voice: 'additive', gain: 0.15, params: { harmonics: h2 } });
-    }
-  }
-  if (complexity > 0.85) {
-    layers.push({
-      voice: 'noise', gain: 0.03 + Math.random() * 0.05,
-      params: { bandHz: 180 + Math.random() * 300, Q: 1 },
-    });
-  }
-  return packRole({
-    patch: {
-      layers,
-      envelope: { attackMs: 8 + Math.random() * 15, releaseMs: 400 + Math.random() * 400 },
-      category: 'tonal',
-    },
-    intervalMs: BAR_MS / 2,
-    fundamentalHz: 55 + Math.random() * 55,
-    synthesisModel: 'additive',
-  });
-}
-
-function generateMelody() {
-  const complexity = Math.random();
-  const baseVoice = pickWeighted({ subtractive: 1.5, fm: 1.3, additive: 1.0, supersaw: 0.6 });
-  const layers = [];
-  if (baseVoice === 'subtractive') {
-    layers.push({
-      voice: 'subtractive', gain: 0.6 + Math.random() * 0.2,
-      params: {
-        wave: pickWeighted({ sawtooth: 1.0, square: 0.4 }),
-        filterStartHz: 2500 + Math.random() * 3500,
-        filterEndHz: 600 + Math.random() * 1000,
-        filterDecayMs: 250 + Math.random() * 500,
-        Q: 2 + Math.random() * 4,
-      },
-    });
-  } else if (baseVoice === 'fm') {
-    layers.push({
-      voice: 'fm', gain: 0.55 + Math.random() * 0.15,
-      params: {
-        ratio: [1, 2, 3, 0.5, 3.5][Math.floor(Math.random() * 5)],
-        modIndexStart: 1.0 + Math.random() * 3,
-        modIndexEnd: 0.2 + Math.random() * 0.6,
-        modDecayMs: 150 + Math.random() * 400,
-      },
-    });
-  } else if (baseVoice === 'supersaw') {
-    layers.push({
-      voice: 'supersaw', gain: 0.45 + Math.random() * 0.15,
-      params: { voices: 3, detuneCents: 5 + Math.random() * 10, filterMult: 8 + Math.random() * 10 },
-    });
-  } else {
-    const h = makeHarmonicsArr();
-    for (let i = 0; i < 6; i++) h[i] = (0.32 - i * 0.045) * (0.85 + Math.random() * 0.3);
-    layers.push({ voice: 'additive', gain: 0.6, params: { harmonics: h } });
-  }
-  if (complexity > 0.5) {
-    if (Math.random() < 0.5) {
-      layers.push({
-        voice: 'fm', gain: 0.12 + Math.random() * 0.15,
-        params: { ratio: 3, modIndexStart: 0.8, modIndexEnd: 0.15, modDecayMs: 200 },
-      });
-    } else {
-      const h = makeHarmonicsArr();
-      h[0] = 0.3; h[2] = 0.15; h[4] = 0.08;
-      layers.push({ voice: 'additive', gain: 0.18, params: { harmonics: h } });
-    }
-  }
-  if (complexity > 0.8) {
-    layers.push({
-      voice: 'noise', gain: 0.04 + Math.random() * 0.05,
-      params: { bandHz: 800 + Math.random() * 2000, Q: 1.5 },
-    });
-  }
-  return packRole({
-    patch: {
-      layers,
-      envelope: { attackMs: 8 + Math.random() * 25, releaseMs: 400 + Math.random() * 500 },
-      category: 'tonal',
-    },
-    intervalMs: BAR_MS / 4,
-    fundamentalHz: 294 + Math.random() * 294,
-    synthesisModel: 'additive',
-  });
-}
-
-function generateVoice() {
-  const complexity = Math.random();
-  const baseVoice = pickWeighted({ additive: 1.5, supersaw: 1.2, subtractive: 0.4 });
-  const layers = [];
-  if (baseVoice === 'additive') {
-    const vowels = [
-      { idx: [2, 3, 4],     amps: [0.40, 0.45, 0.20] },         // ah
-      { idx: [0, 8, 9, 10], amps: [0.45, 0.30, 0.25, 0.15] },   // ee
-      { idx: [0, 1, 2, 3],  amps: [0.30, 0.45, 0.35, 0.20] },   // oh
-    ];
-    const v = vowels[Math.floor(Math.random() * vowels.length)];
-    const h = makeHarmonicsArr();
-    h[0] = 0.22 + Math.random() * 0.15;
-    v.idx.forEach((idx, i) => { h[idx] = v.amps[i] * (0.85 + Math.random() * 0.30); });
-    layers.push({ voice: 'additive', gain: 0.55, params: { harmonics: h } });
-  } else if (baseVoice === 'supersaw') {
-    layers.push({
-      voice: 'supersaw', gain: 0.4 + Math.random() * 0.15,
-      params: { voices: 3, detuneCents: 6 + Math.random() * 8, filterMult: 5 + Math.random() * 7 },
-    });
-  } else {
-    layers.push({
-      voice: 'subtractive', gain: 0.5,
-      params: { wave: 'sawtooth', filterStartHz: 1500, filterEndHz: 900, filterDecayMs: 800, Q: 2 },
-    });
-  }
-  // A breath / air layer is a defining part of "voice" — include it often.
-  if (Math.random() < 0.7 || complexity > 0.4) {
-    layers.push({
-      voice: 'noise', gain: 0.04 + Math.random() * 0.06,
-      params: { bandHz: 1500 + Math.random() * 2500, Q: 1.2 },
-    });
-  }
-  if (complexity > 0.7) {
-    const h = makeHarmonicsArr();
-    h[0] = 0.2; h[1] = 0.15; h[3] = 0.1;
-    layers.push({ voice: 'additive', gain: 0.14, params: { harmonics: h } });
-  }
-  return packRole({
-    patch: {
-      layers,
-      envelope: { attackMs: 50 + Math.random() * 60, releaseMs: 700 + Math.random() * 500 },
-      category: 'tonal',
-    },
-    intervalMs: BAR_MS,
-    fundamentalHz: 196 + Math.random() * 196,
-    synthesisModel: 'additive',
-  });
-}
-
-const TIMBRE_ROLES = {
-  kick:   { label: 'kick',  generate: generateKick,   color: '#e85a6f' },
-  snare:  { label: 'snare', generate: generateSnare,  color: '#ffa94d' },
-  hat:    { label: 'hat',   generate: generateHihat,  color: '#ffd166' },
-  bass:   { label: 'bass',  generate: generateBass,   color: '#9474e8' },
-  melody: { label: 'mel',   generate: generateMelody, color: '#5fd2e8' },
-  voice:  { label: 'voi',   generate: generateVoice,  color: '#b393d6' },
-};
-
-let activeRole = 'melody';
-
-// === Live keyboard timbre ===
-// The keyboard (MIDI / QWERTY / on-screen) plays through one shared
-// timbre defined by `liveTimbre`. Each turn of the hardware main
-// encoder cycles the role and re-rolls a fresh variation so the
-// player gets meaningfully different sounds without leaving the keys.
-const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice'];
-let liveTimbreIdx = 1;  // melody
-let liveTimbre = TIMBRE_ROLES[LIVE_TIMBRE_CYCLE[liveTimbreIdx]].generate();
-liveTimbre.role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
-
-function rollLiveTimbre(direction = 1) {
-  liveTimbreIdx = (liveTimbreIdx + direction + LIVE_TIMBRE_CYCLE.length) % LIVE_TIMBRE_CYCLE.length;
-  const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
-  liveTimbre = TIMBRE_ROLES[role].generate();
-  liveTimbre.role = role;
-  activeRole = role;
-  document.querySelectorAll('.palette-item').forEach(el =>
-    el.classList.toggle('active', el.dataset.role === role));
-}
-
 //
 // =========================================================================
 //  STATE
@@ -2672,7 +2388,7 @@ function buildPalette() {
     item.dataset.role = roleKey;
     item.innerHTML = `<span class="pal-dot" style="background:${def.color}"></span>${def.label}`;
     item.addEventListener('click', () => {
-      activeRole = roleKey;
+      setActiveRole(roleKey);
       document.querySelectorAll('.palette-item').forEach(x => x.classList.remove('active'));
       item.classList.add('active');
     });
