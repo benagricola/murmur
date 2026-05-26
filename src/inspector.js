@@ -16,8 +16,9 @@ import { seeds, seedById, state } from './state.js';
 import {
   SVGNS, renderSeed, removeSeed, radiusForFundamental, syncRenderedSeeds,
 } from './seeds.js';
-import { setStepHighlightHandler } from './scheduler.js';
+import { setStepHighlightHandler, playNoteAt } from './scheduler.js';
 import { refreshSelectionLights, paintScreen } from './output/minilab3.js';
+import { ensureAudio } from './audio/context.js';
 
 let takeSnapshotFn = (label) => {};
 let reevaluateAllCapturesFn = () => {};
@@ -420,7 +421,7 @@ document.getElementById('mute-toggle').addEventListener('click', () => {
   takeSnapshotFn(s.muted ? 'muted' : 'unmuted');
 });
 
-document.getElementById('regen-btn').addEventListener('click', () => {
+document.getElementById('regen-btn').addEventListener('click', async () => {
   const s = seedById(state.selectedSeedId);
   if (!s || s.kind !== 'voice') return;
   const roleKey = s.role || 'melody';
@@ -436,6 +437,16 @@ document.getElementById('regen-btn').addEventListener('click', () => {
   syncRenderedSeeds();
   selectSeed(s.id);
   takeSnapshotFn('rerolled ' + s.label);
+  // Audible + visual feedback that the sound actually changed.
+  await ensureAudio();
+  if (audioCtx) {
+    playNoteAt(s, audioCtx.currentTime + 0.02, s.fundamental, s.gain || 0.35, s.decay);
+  }
+  const node = document.querySelector(`[data-seed-id="${s.id}"]`);
+  if (node) {
+    node.classList.add('regen-pulse');
+    setTimeout(() => node.classList.remove('regen-pulse'), 600);
+  }
 });
 document.getElementById('delete-btn').addEventListener('click', () => {
   if (!state.selectedSeedId) return;

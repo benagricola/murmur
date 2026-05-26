@@ -282,16 +282,20 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
   env.gain.linearRampToValueAtTime(gain, when + a);
   return {
     release: (whenRelease) => {
+      // Each step is independently best-effort. The old single
+      // try/catch would skip the voice.stop() calls if the envelope
+      // manipulation threw — leaving oscillators running forever. We
+      // ALWAYS schedule the stops, even if envelope shaping fails.
+      const g = env.gain;
       try {
-        if (typeof env.gain.cancelAndHoldAtTime === 'function') {
-          env.gain.cancelAndHoldAtTime(whenRelease);
-        } else {
-          env.gain.cancelScheduledValues(whenRelease);
-          env.gain.setValueAtTime(env.gain.value, whenRelease);
-        }
-        env.gain.linearRampToValueAtTime(0, whenRelease + r);
-        for (const v of voices) v.stop(whenRelease + r + 0.05);
+        if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(whenRelease);
+        else { g.cancelScheduledValues(whenRelease); g.setValueAtTime(g.value, whenRelease); }
       } catch (e) {}
+      try { g.linearRampToValueAtTime(0, whenRelease + r); } catch (e) {}
+      const stopAt = whenRelease + r + 0.05;
+      for (const v of voices) {
+        try { v.stop(stopAt); } catch (e) {}
+      }
     },
     detune: (cents, t) => { for (const d of detunes) d(cents, t); },
     output: env,

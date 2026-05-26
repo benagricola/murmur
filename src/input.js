@@ -266,16 +266,24 @@ function refreshMIDIInputs() {
     inputCount++;
     if (!firstName) firstName = input.name || 'midi';
   }
+  // For outputs we DON'T apply the input skip pattern — some MiniLab 3
+  // firmware versions route lights/screen SysEx through the ALV port,
+  // not the main MIDI port. We collect every output and let
+  // output/minilab3.js spam SysEx to all of them; the device ignores
+  // bytes it doesn't understand.
   midiOutputs.length = 0;
-  for (const output of midiAccess.outputs.values()) {
-    if (MIDI_PORT_SKIP_PATTERN.test(output.name || '')) continue;
-    midiOutputs.push(output);
-  }
+  for (const output of midiAccess.outputs.values()) midiOutputs.push(output);
   const led = document.getElementById('midi-led');
   const label = document.getElementById('midi-label');
   if (inputCount > 0) {
     led.classList.add('connected');
-    label.textContent = firstName.toLowerCase().replace(/^.*:/, '').slice(0, 14);
+    // Port names look like `Minilab3:Minilab3 MIDI 20:0` — strip the
+    // device-prefix (everything up to the *first* colon) and the
+    // trailing OS port number `20:0`, leaving the human-readable
+    // chunk in the middle.
+    let displayName = firstName.includes(':') ? firstName.substring(firstName.indexOf(':') + 1) : firstName;
+    displayName = displayName.replace(/\s+\d+:\d+$/, '').toLowerCase();
+    label.textContent = displayName.slice(0, 16);
     // Send the DAW-connect handshake and paint the device's pads +
     // screen. If the user's device isn't a MiniLab 3 this is harmless
     // — non-Arturia devices ignore the manufacturer-prefixed SysEx.

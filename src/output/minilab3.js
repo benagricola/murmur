@@ -21,24 +21,29 @@ import { noteName, freqFromMidi, midiFromFreq } from '../constants.js';
 const HEADER = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42];
 const FOOTER = [0xF7];
 
-// Output handle. Populated by connectMinilab(), nulled on disconnect.
-// We hold one reference rather than calling into the live midiOutputs
-// array on every send so the binding survives port hot-swaps better.
-let midiOut = null;
+// All MiniLab outputs we've seen on this device — we send SysEx to
+// every one of them and let the device pick. Different firmware
+// versions route lights / screen through different ports (some use
+// the main port, some the ALV port). Spamming all of them is harmless
+// because the device ignores SysEx with the wrong manufacturer ID.
+let midiOuts = [];
 
-// Bind to the first non-skipped MIDI output and run the DAW handshake.
-// `outputs` is the array maintained in input.js — passed in so this
-// module doesn't have to import upward into input.js (cycle).
+// Bind to every MIDI output whose name suggests it belongs to a
+// MiniLab (case-insensitive substring match) and run the DAW
+// handshake. `outputs` is the array maintained in input.js — passed
+// in so this module doesn't have to import upward (cycle).
 export function connectMinilab(outputs) {
-  // Prefer a port whose name looks like the main MiniLab port. Fall
-  // back to the first available output.
-  midiOut = outputs.find(o => /minilab/i.test(o.name || '') && !/mcu|hui|alv|din|thru/i.test(o.name || ''))
-        || outputs[0] || null;
-  if (!midiOut) return false;
+  midiOuts = (outputs || []).filter(o => /minilab/i.test(o.name || ''));
+  if (midiOuts.length === 0 && outputs && outputs.length > 0) {
+    // No port name matched — fall back to whatever's first so test
+    // hardware with unusual names still gets the handshake.
+    midiOuts = [outputs[0]];
+  }
+  if (midiOuts.length === 0) return false;
+  console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name));
   // Hello sequence from Ableton's __init__.py: enter DAW mode, then
-  // request the device's current program. We don't parse the program
-  // reply yet — it lands on the input port and is logged like any
-  // other SysEx.
+  // request the device's current program. Reply lands on the input
+  // port and is captured by the regular MIDI log.
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
   sendRaw([0x01, 0x00, 0x40, 0x01]);
   // After handshake the device is ready to accept LED and screen
@@ -48,20 +53,18 @@ export function connectMinilab(outputs) {
 }
 
 export function disconnectMinilab() {
-  if (!midiOut) return;
-  // Arturia's script's goodbye — releases DAW mode so the device
-  // reverts to its normal stand-alone behaviour.
+  if (midiOuts.length === 0) return;
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x20]);
-  midiOut = null;
+  midiOuts = [];
 }
 
 function sendRaw(bytes) {
-  if (!midiOut) return;
-  try {
-    midiOut.send([...HEADER, ...bytes, ...FOOTER]);
-  } catch (e) {
-    // Common case: the port closed between connect and send. Don't spam.
-    console.warn('[minilab] sysex send failed', e);
+  if (midiOuts.length === 0) return;
+  const msg = [...HEADER, ...bytes, ...FOOTER];
+  for (const out of midiOuts) {
+    try { out.send(msg); } catch (e) {
+      console.warn('[minilab] sysex send failed', out.name, e);
+    }
   }
 }
 

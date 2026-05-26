@@ -272,7 +272,10 @@ export function setActiveRole(role) {
   if (TIMBRE_ROLES[role]) activeRole = role;
 }
 
-const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice'];
+// Includes the three drum roles too — kick/snare/hat play pitched
+// versions of themselves on the keyboard, which is musically odd but
+// playable and gives more variety per encoder turn.
+const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice', 'kick', 'snare', 'hat'];
 let liveTimbreIdx = 1;  // melody
 export let liveTimbre = TIMBRE_ROLES[LIVE_TIMBRE_CYCLE[liveTimbreIdx]].generate();
 liveTimbre.role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];

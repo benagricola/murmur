@@ -527,6 +527,16 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
 }
 .tap-marker { pointer-events: none; opacity: 0.6; }
 
+/* Regenerate pulse — fires for ~600ms when the user clicks the
+   inspector's regenerate button so the visual confirms the change
+   alongside the audible one-shot we trigger at the same time. */
+.regen-pulse .seed-core { animation: regen-pulse 600ms ease-out; }
+@keyframes regen-pulse {
+  0%   { filter: brightness(1.0) drop-shadow(0 0 0 currentColor); }
+  30%  { filter: brightness(1.8) drop-shadow(0 0 20px var(--accent)); }
+  100% { filter: brightness(1.0) drop-shadow(0 0 0 currentColor); }
+}
+
 /* Floating note indicator (when a note plays from the keyboard) */
 .float-note {
   position: absolute;

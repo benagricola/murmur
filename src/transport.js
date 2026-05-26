@@ -7,7 +7,7 @@ import { BPM, BAR_MS, setTempo } from './tempo.js';
 import { seeds, state } from './state.js';
 import {
   ensureAudio, audioCtx, supportsPeriodicWave,
-  setMasterVol, showAudioStatus, withTimeout,
+  setMasterVol, showAudioStatus, withTimeout, onContextCreated,
 } from './audio/context.js';
 import { refreshPadLights, paintScreen } from './output/minilab3.js';
 
@@ -97,6 +97,15 @@ playBtn.addEventListener('click', async () => {
 
 document.getElementById('vol').addEventListener('input', (e) => {
   setMasterVol(parseFloat(e.target.value) / 100);
+});
+
+// Browsers restore slider values across reloads, but the AudioContext
+// is recreated each load and the master gain defaults to 0.35. Re-sync
+// gain from the slider as soon as audio comes online, so the audible
+// volume always matches what the slider visibly shows.
+onContextCreated(() => {
+  const slider = document.getElementById('vol');
+  if (slider) setMasterVol(parseFloat(slider.value) / 100);
 });
 
 document.getElementById('tempo-slider').addEventListener('input', (e) => {
