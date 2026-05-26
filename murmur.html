@@ -1112,94 +1112,257 @@ function shuffleArr(arr) {
   return a;
 }
 
-function generateKick() {
-  // Visual harmonics for the blob shape (not used for synthesis directly)
-  const h = makeHarmonicsArr();
-  h[0] = 0.5; h[1] = 0.2; h[2] = 0.08;
+// Weighted random pick — `weights` is an object like { foo: 2, bar: 1 }.
+// `foo` will be twice as likely as `bar`.
+function pickWeighted(weights) {
+  let total = 0;
+  for (const k in weights) total += weights[k];
+  let r = Math.random() * total;
+  for (const k in weights) {
+    r -= weights[k];
+    if (r <= 0) return k;
+  }
+  return Object.keys(weights)[0];
+}
+
+// Pack a generator's output into the legacy + patch shape. Used by every
+// role generator so the call sites stay consistent.
+function packRole({ patch, intervalMs, fundamentalHz, synthesisModel }) {
+  const env = patch.envelope || { attackMs: 8, releaseMs: 400 };
   return {
-    harmonics: h,
-    decay: 200,
-    attackMs: 2,
+    harmonics: harmonicsForPatch(patch),
+    decay: env.releaseMs,
+    attackMs: env.attackMs,
+    intervalMs,
+    fundamentalHz,
+    synthesisModel,
+    patch,
+  };
+}
+
+function generateKick() {
+  return packRole({
+    patch: {
+      layers: [{ voice: 'kick', gain: 1, params: {} }],
+      envelope: { attackMs: 2, releaseMs: 200 },
+      category: 'drum',
+    },
     intervalMs: BAR_MS / 2,
     fundamentalHz: 55 + Math.random() * 18,
     synthesisModel: 'kick',
-  };
+  });
 }
 
 function generateSnare() {
-  const h = makeHarmonicsArr();
-  h[0] = 0.30; h[1] = 0.22; h[2] = 0.18; h[3] = 0.14; h[4] = 0.10;
-  return {
-    harmonics: h,
-    decay: 150,
-    attackMs: 2,
+  return packRole({
+    patch: {
+      layers: [{ voice: 'snare', gain: 1, params: {} }],
+      envelope: { attackMs: 2, releaseMs: 150 },
+      category: 'drum',
+    },
     intervalMs: BAR_MS / 2,
     fundamentalHz: 180 + Math.random() * 40,
     synthesisModel: 'snare',
-  };
+  });
 }
 
 function generateHihat() {
-  const h = makeHarmonicsArr();
-  // Visual: bright dense outline
-  for (let i = 5; i < 12; i++) h[i] = 0.10 + Math.random() * 0.12;
-  return {
-    harmonics: h,
-    decay: 80,
-    attackMs: 2,
+  return packRole({
+    patch: {
+      layers: [{ voice: 'hihat', gain: 1, params: {} }],
+      envelope: { attackMs: 2, releaseMs: 80 },
+      category: 'drum',
+    },
     intervalMs: BAR_MS / 8,
     fundamentalHz: 800 + Math.random() * 400,
     synthesisModel: 'hihat',
-  };
+  });
 }
 
+// === Generative complexity ===
+// Each tonal role rolls a `complexity` per call. Low complexity = one
+// punchy layer, default params. Higher complexity adds secondary layers
+// (a touch of FM bell, a body harmonic, a wisp of breath noise). The
+// roll happens per generate() call so the 🎲 button and main encoder
+// give a mix of simple and rich sounds without the user designing them.
+
 function generateBass() {
-  const h = makeHarmonicsArr();
-  h[0] = 0.42 + Math.random() * 0.12;
-  h[1] = 0.16 + Math.random() * 0.08;
-  h[2] = 0.05 + Math.random() * 0.05;
-  return {
-    harmonics: h,
-    decay: 400 + Math.random() * 400,
-    attackMs: 10,
+  const complexity = Math.random();
+  const baseVoice = pickWeighted({ subtractive: 2.0, fm: 1.2, additive: 0.8 });
+  const layers = [];
+  if (baseVoice === 'subtractive') {
+    layers.push({
+      voice: 'subtractive',
+      gain: 0.75 + Math.random() * 0.15,
+      params: {
+        wave: Math.random() < 0.7 ? 'sawtooth' : 'square',
+        filterStartHz: 800 + Math.random() * 2400,
+        filterEndHz: 120 + Math.random() * 180,
+        filterDecayMs: 250 + Math.random() * 400,
+        Q: 3 + Math.random() * 7,
+      },
+    });
+  } else if (baseVoice === 'fm') {
+    layers.push({
+      voice: 'fm',
+      gain: 0.6 + Math.random() * 0.15,
+      params: {
+        ratio: [0.5, 1, 2][Math.floor(Math.random() * 3)],
+        modIndexStart: 1.5 + Math.random() * 3,
+        modIndexEnd: 0.2 + Math.random() * 0.5,
+        modDecayMs: 200 + Math.random() * 400,
+      },
+    });
+  } else {
+    const h = makeHarmonicsArr();
+    h[0] = 0.42 + Math.random() * 0.12;
+    h[1] = 0.16 + Math.random() * 0.08;
+    h[2] = 0.05 + Math.random() * 0.05;
+    layers.push({ voice: 'additive', gain: 0.7, params: { harmonics: h } });
+  }
+  if (complexity > 0.55) {
+    if (Math.random() < 0.6) {
+      layers.push({
+        voice: 'fm', gain: 0.10 + Math.random() * 0.12,
+        params: { ratio: 3, modIndexStart: 0.5, modIndexEnd: 0.1, modDecayMs: 200 },
+      });
+    } else {
+      const h2 = makeHarmonicsArr();
+      h2[0] = 0.3; h2[1] = 0.15;
+      layers.push({ voice: 'additive', gain: 0.15, params: { harmonics: h2 } });
+    }
+  }
+  if (complexity > 0.85) {
+    layers.push({
+      voice: 'noise', gain: 0.03 + Math.random() * 0.05,
+      params: { bandHz: 180 + Math.random() * 300, Q: 1 },
+    });
+  }
+  return packRole({
+    patch: {
+      layers,
+      envelope: { attackMs: 8 + Math.random() * 15, releaseMs: 400 + Math.random() * 400 },
+      category: 'tonal',
+    },
     intervalMs: BAR_MS / 2,
     fundamentalHz: 55 + Math.random() * 55,
     synthesisModel: 'additive',
-  };
+  });
 }
 
 function generateMelody() {
-  const h = makeHarmonicsArr();
-  for (let i = 0; i < 6; i++) h[i] = (0.32 - i * 0.045) * (0.85 + Math.random() * 0.30);
-  return {
-    harmonics: h,
-    decay: 400 + Math.random() * 400,
-    attackMs: 10,
+  const complexity = Math.random();
+  const baseVoice = pickWeighted({ subtractive: 1.5, fm: 1.3, additive: 1.0, supersaw: 0.6 });
+  const layers = [];
+  if (baseVoice === 'subtractive') {
+    layers.push({
+      voice: 'subtractive', gain: 0.6 + Math.random() * 0.2,
+      params: {
+        wave: pickWeighted({ sawtooth: 1.0, square: 0.4 }),
+        filterStartHz: 2500 + Math.random() * 3500,
+        filterEndHz: 600 + Math.random() * 1000,
+        filterDecayMs: 250 + Math.random() * 500,
+        Q: 2 + Math.random() * 4,
+      },
+    });
+  } else if (baseVoice === 'fm') {
+    layers.push({
+      voice: 'fm', gain: 0.55 + Math.random() * 0.15,
+      params: {
+        ratio: [1, 2, 3, 0.5, 3.5][Math.floor(Math.random() * 5)],
+        modIndexStart: 1.0 + Math.random() * 3,
+        modIndexEnd: 0.2 + Math.random() * 0.6,
+        modDecayMs: 150 + Math.random() * 400,
+      },
+    });
+  } else if (baseVoice === 'supersaw') {
+    layers.push({
+      voice: 'supersaw', gain: 0.45 + Math.random() * 0.15,
+      params: { voices: 3, detuneCents: 5 + Math.random() * 10, filterMult: 8 + Math.random() * 10 },
+    });
+  } else {
+    const h = makeHarmonicsArr();
+    for (let i = 0; i < 6; i++) h[i] = (0.32 - i * 0.045) * (0.85 + Math.random() * 0.3);
+    layers.push({ voice: 'additive', gain: 0.6, params: { harmonics: h } });
+  }
+  if (complexity > 0.5) {
+    if (Math.random() < 0.5) {
+      layers.push({
+        voice: 'fm', gain: 0.12 + Math.random() * 0.15,
+        params: { ratio: 3, modIndexStart: 0.8, modIndexEnd: 0.15, modDecayMs: 200 },
+      });
+    } else {
+      const h = makeHarmonicsArr();
+      h[0] = 0.3; h[2] = 0.15; h[4] = 0.08;
+      layers.push({ voice: 'additive', gain: 0.18, params: { harmonics: h } });
+    }
+  }
+  if (complexity > 0.8) {
+    layers.push({
+      voice: 'noise', gain: 0.04 + Math.random() * 0.05,
+      params: { bandHz: 800 + Math.random() * 2000, Q: 1.5 },
+    });
+  }
+  return packRole({
+    patch: {
+      layers,
+      envelope: { attackMs: 8 + Math.random() * 25, releaseMs: 400 + Math.random() * 500 },
+      category: 'tonal',
+    },
     intervalMs: BAR_MS / 4,
     fundamentalHz: 294 + Math.random() * 294,
     synthesisModel: 'additive',
-  };
+  });
 }
 
 function generateVoice() {
-  // Vowel-like formant peaks
-  const vowels = [
-    { idx: [2, 3, 4],      amps: [0.40, 0.45, 0.20] },         // ah
-    { idx: [0, 8, 9, 10],  amps: [0.45, 0.30, 0.25, 0.15] },   // ee
-    { idx: [0, 1, 2, 3],   amps: [0.30, 0.45, 0.35, 0.20] },   // oh
-  ];
-  const v = vowels[Math.floor(Math.random() * vowels.length)];
-  const h = makeHarmonicsArr();
-  h[0] = 0.22 + Math.random() * 0.15;
-  v.idx.forEach((idx, i) => { h[idx] = v.amps[i] * (0.85 + Math.random() * 0.30); });
-  return {
-    harmonics: h,
-    decay: 700 + Math.random() * 500,
-    attackMs: 80,
+  const complexity = Math.random();
+  const baseVoice = pickWeighted({ additive: 1.5, supersaw: 1.2, subtractive: 0.4 });
+  const layers = [];
+  if (baseVoice === 'additive') {
+    const vowels = [
+      { idx: [2, 3, 4],     amps: [0.40, 0.45, 0.20] },         // ah
+      { idx: [0, 8, 9, 10], amps: [0.45, 0.30, 0.25, 0.15] },   // ee
+      { idx: [0, 1, 2, 3],  amps: [0.30, 0.45, 0.35, 0.20] },   // oh
+    ];
+    const v = vowels[Math.floor(Math.random() * vowels.length)];
+    const h = makeHarmonicsArr();
+    h[0] = 0.22 + Math.random() * 0.15;
+    v.idx.forEach((idx, i) => { h[idx] = v.amps[i] * (0.85 + Math.random() * 0.30); });
+    layers.push({ voice: 'additive', gain: 0.55, params: { harmonics: h } });
+  } else if (baseVoice === 'supersaw') {
+    layers.push({
+      voice: 'supersaw', gain: 0.4 + Math.random() * 0.15,
+      params: { voices: 3, detuneCents: 6 + Math.random() * 8, filterMult: 5 + Math.random() * 7 },
+    });
+  } else {
+    layers.push({
+      voice: 'subtractive', gain: 0.5,
+      params: { wave: 'sawtooth', filterStartHz: 1500, filterEndHz: 900, filterDecayMs: 800, Q: 2 },
+    });
+  }
+  // A breath / air layer is a defining part of "voice" — include it often.
+  if (Math.random() < 0.7 || complexity > 0.4) {
+    layers.push({
+      voice: 'noise', gain: 0.04 + Math.random() * 0.06,
+      params: { bandHz: 1500 + Math.random() * 2500, Q: 1.2 },
+    });
+  }
+  if (complexity > 0.7) {
+    const h = makeHarmonicsArr();
+    h[0] = 0.2; h[1] = 0.15; h[3] = 0.1;
+    layers.push({ voice: 'additive', gain: 0.14, params: { harmonics: h } });
+  }
+  return packRole({
+    patch: {
+      layers,
+      envelope: { attackMs: 50 + Math.random() * 60, releaseMs: 700 + Math.random() * 500 },
+      category: 'tonal',
+    },
     intervalMs: BAR_MS,
     fundamentalHz: 196 + Math.random() * 196,
     synthesisModel: 'additive',
-  };
+  });
 }
 
 const TIMBRE_ROLES = {
@@ -1434,6 +1597,305 @@ function setOscWave(osc, harmonicAmps) {
   else osc.type = 'sine';
 }
 
+// =========================================================================
+//  VOICES — atomic synthesis primitives
+// =========================================================================
+//
+// Each voice is a small builder that returns:
+//   { output: AudioNode, stop(when), detune(cents, when) | null }
+//
+// `output` carries the voice's raw signal (no envelope, no routing). The
+// player (playPatch) wraps voices in a shared envelope and routes the
+// summed signal to bombs/modifiers/master. `stop` schedules teardown.
+// `detune` is null for noise/drum voices that don't track pitch bend.
+//
+// A "patch" is `{ layers: [{voice, params, gain}], envelope, category }`.
+// Single-layer patches are the common case; multi-layer patches mix
+// timbres in parallel (e.g. saw bass + FM bell + breath of noise).
+
+const VOICES = {};
+
+VOICES.additive = function(audioCtx, freq, when, params) {
+  const harmonics = params.harmonics || [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
+  const osc = audioCtx.createOscillator();
+  const out = audioCtx.createGain();
+  setOscWave(osc, harmonics);
+  osc.frequency.value = freq;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = Math.min(8000, freq * (params.filterMult || 16));
+  filter.Q.value = params.Q != null ? params.Q : 0.7;
+  osc.connect(filter); filter.connect(out);
+  osc.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
+    detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
+  };
+};
+
+VOICES.subtractive = function(audioCtx, freq, when, params) {
+  const osc = audioCtx.createOscillator();
+  const out = audioCtx.createGain();
+  osc.type = params.wave || 'sawtooth';
+  osc.frequency.value = freq;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.Q.value = params.Q != null ? params.Q : 6;
+  const startHz = Math.max(80, params.filterStartHz || Math.min(8000, freq * 12));
+  const endHz = Math.max(80, params.filterEndHz || Math.min(2000, freq * 3));
+  const decayMs = params.filterDecayMs || 350;
+  filter.frequency.setValueAtTime(startHz, when);
+  filter.frequency.exponentialRampToValueAtTime(endHz, when + decayMs / 1000);
+  osc.connect(filter); filter.connect(out);
+  osc.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
+    detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
+  };
+};
+
+VOICES.fm = function(audioCtx, freq, when, params) {
+  const ratio = params.ratio != null ? params.ratio : 2;
+  const modIndexStart = params.modIndexStart != null ? params.modIndexStart : 2;
+  const modIndexEnd = params.modIndexEnd != null ? params.modIndexEnd : 0.4;
+  const decayMs = params.modDecayMs || 400;
+  const carrier = audioCtx.createOscillator();
+  const mod = audioCtx.createOscillator();
+  const modGain = audioCtx.createGain();
+  const out = audioCtx.createGain();
+  carrier.type = 'sine';
+  mod.type = 'sine';
+  carrier.frequency.value = freq;
+  mod.frequency.value = freq * ratio;
+  modGain.gain.setValueAtTime(freq * modIndexStart, when);
+  modGain.gain.exponentialRampToValueAtTime(Math.max(0.01, freq * modIndexEnd), when + decayMs / 1000);
+  mod.connect(modGain);
+  modGain.connect(carrier.frequency);
+  carrier.connect(out);
+  mod.start(when);
+  carrier.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => {
+      try { mod.stop(whenStop); } catch (e) {}
+      try { carrier.stop(whenStop); } catch (e) {}
+    },
+    detune: (cents, t) => {
+      try { carrier.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
+      try { mod.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
+    },
+  };
+};
+
+VOICES.supersaw = function(audioCtx, freq, when, params) {
+  const voiceCount = params.voices || 3;
+  const spread = params.detuneCents != null ? params.detuneCents : 7;
+  const sum = audioCtx.createGain();
+  const oscs = [];
+  for (let i = 0; i < voiceCount; i++) {
+    const o = audioCtx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = freq;
+    const baseDetune = (i - (voiceCount - 1) / 2) * spread;
+    o.detune.value = baseDetune;
+    const og = audioCtx.createGain();
+    og.gain.value = 1 / voiceCount;
+    o.connect(og); og.connect(sum);
+    o.start(when);
+    oscs.push({ osc: o, baseDetune });
+  }
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = Math.min(8000, freq * (params.filterMult || 10));
+  filter.Q.value = params.Q != null ? params.Q : 0.5;
+  const out = audioCtx.createGain();
+  sum.connect(filter); filter.connect(out);
+  return {
+    output: out,
+    stop: (whenStop) => { for (const { osc } of oscs) { try { osc.stop(whenStop); } catch (e) {} } },
+    detune: (cents, t) => {
+      for (const { osc, baseDetune } of oscs) {
+        try { osc.detune.setTargetAtTime(cents + baseDetune, t, 0.005); } catch (e) {}
+      }
+    },
+  };
+};
+
+VOICES.noise = function(audioCtx, freq, when, params) {
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoiseBuffer(2.0);
+  noise.loop = true;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = params.filterType || 'bandpass';
+  filter.frequency.value = Math.max(80, params.bandHz || Math.min(6000, freq * (params.bandMult || 4)));
+  filter.Q.value = params.Q != null ? params.Q : 1.5;
+  const out = audioCtx.createGain();
+  noise.connect(filter); filter.connect(out);
+  noise.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => { try { noise.stop(whenStop); } catch (e) {} },
+    detune: null,
+  };
+};
+
+// Drum voices have internal envelopes baked in — the player treats them
+// as one-shot and skips the shared attack/release ramp.
+
+VOICES.kick = function(audioCtx, freq, when, params) {
+  const osc = audioCtx.createOscillator();
+  const out = audioCtx.createGain();
+  osc.type = 'sine';
+  const startFreq = Math.max(40, freq * 1.5);
+  const endFreq = Math.max(35, freq * 0.5);
+  osc.frequency.setValueAtTime(startFreq, when);
+  osc.frequency.exponentialRampToValueAtTime(endFreq, when + 0.060);
+  osc.connect(out);
+  out.gain.setValueAtTime(0, when);
+  out.gain.linearRampToValueAtTime(1.4, when + 0.002);
+  out.gain.exponentialRampToValueAtTime(0.0008, when + 0.20);
+  osc.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => { try { osc.stop(Math.max(whenStop, when + 0.25)); } catch (e) {} },
+    detune: null,
+  };
+};
+
+VOICES.snare = function(audioCtx, freq, when, params) {
+  const out = audioCtx.createGain();
+  const osc = audioCtx.createOscillator();
+  const oscEnv = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.value = Math.max(140, freq * 0.8);
+  osc.connect(oscEnv); oscEnv.connect(out);
+  oscEnv.gain.setValueAtTime(0, when);
+  oscEnv.gain.linearRampToValueAtTime(0.4, when + 0.001);
+  oscEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.08);
+
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoiseBuffer(0.15);
+  const nf = audioCtx.createBiquadFilter();
+  nf.type = 'bandpass'; nf.frequency.value = 2200; nf.Q.value = 0.7;
+  const noiseEnv = audioCtx.createGain();
+  noise.connect(nf); nf.connect(noiseEnv); noiseEnv.connect(out);
+  noiseEnv.gain.setValueAtTime(0, when);
+  noiseEnv.gain.linearRampToValueAtTime(0.65, when + 0.001);
+  noiseEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.12);
+
+  osc.start(when); noise.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => {
+      try { osc.stop(Math.max(whenStop, when + 0.15)); } catch (e) {}
+      try { noise.stop(Math.max(whenStop, when + 0.15)); } catch (e) {}
+    },
+    detune: null,
+  };
+};
+
+VOICES.hihat = function(audioCtx, freq, when, params) {
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoiseBuffer(0.1);
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass';
+  filter.frequency.value = 7000;
+  const out = audioCtx.createGain();
+  noise.connect(filter); filter.connect(out);
+  out.gain.setValueAtTime(0, when);
+  out.gain.linearRampToValueAtTime(0.55, when + 0.001);
+  out.gain.exponentialRampToValueAtTime(0.0008, when + 0.045);
+  noise.start(when);
+  return {
+    output: out,
+    stop: (whenStop) => { try { noise.stop(Math.max(whenStop, when + 0.1)); } catch (e) {} },
+    detune: null,
+  };
+};
+
+// playPatch — single dispatcher for all note-making in murmur. Builds
+// every voice in `patch.layers` in parallel, sums them through a shared
+// envelope, hands the result to the routing function. Returns a handle
+// with `release(when)` for the open-ended live case and `detune(cents)`
+// for pitch-bend updates.
+function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
+  if (!audioCtx) return null;
+  if (!patch || !patch.layers || patch.layers.length === 0) {
+    patch = { layers: [{ voice: 'additive', gain: 1, params: {} }] };
+  }
+  const summer = audioCtx.createGain();
+  const env = audioCtx.createGain();
+  summer.connect(env);
+  routeFn(env);
+
+  const voices = [];
+  const detunes = [];
+  for (const layer of patch.layers) {
+    const fn = VOICES[layer.voice];
+    if (!fn) continue;
+    const params = layer.params || {};
+    const v = fn(audioCtx, freq, when, params);
+    const lg = audioCtx.createGain();
+    lg.gain.value = layer.gain != null ? layer.gain : 1.0;
+    v.output.connect(lg);
+    lg.connect(summer);
+    voices.push(v);
+    if (v.detune) detunes.push(v.detune);
+  }
+
+  const isOneShot = patch.category === 'drum' || patch.isOneShot === true;
+  const e = patch.envelope || { attackMs: 8, releaseMs: 200 };
+  const a = Math.max(0.001, (e.attackMs || 8) / 1000);
+  const r = Math.max(0.01, (e.releaseMs || 200) / 1000);
+
+  if (isOneShot) {
+    env.gain.value = gain;
+    const stopAt = when + (sustainMs ? sustainMs / 1000 : 0.5);
+    for (const v of voices) v.stop(stopAt + 0.1);
+    return {
+      release: () => {},
+      detune: (cents, t) => { for (const d of detunes) d(cents, t); },
+      output: env,
+    };
+  }
+
+  if (sustainMs != null) {
+    const sustainSec = Math.max(0, sustainMs / 1000 - a);
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(gain, when + a);
+    if (sustainSec > 0) env.gain.setValueAtTime(gain, when + a + sustainSec);
+    env.gain.linearRampToValueAtTime(0, when + a + sustainSec + r);
+    for (const v of voices) v.stop(when + a + sustainSec + r + 0.05);
+    return {
+      release: () => {},
+      detune: (cents, t) => { for (const d of detunes) d(cents, t); },
+      output: env,
+    };
+  }
+
+  // Live mode: attack then sustain indefinitely; caller invokes release()
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(gain, when + a);
+  return {
+    release: (whenRelease) => {
+      try {
+        if (typeof env.gain.cancelAndHoldAtTime === 'function') {
+          env.gain.cancelAndHoldAtTime(whenRelease);
+        } else {
+          env.gain.cancelScheduledValues(whenRelease);
+          env.gain.setValueAtTime(env.gain.value, whenRelease);
+        }
+        env.gain.linearRampToValueAtTime(0, whenRelease + r);
+        for (const v of voices) v.stop(whenRelease + r + 0.05);
+      } catch (e) {}
+    },
+    detune: (cents, t) => { for (const d of detunes) d(cents, t); },
+    output: env,
+  };
+}
+
 // === DRUM SYNTHESIS ===
 // Procedural drum sounds, not additive. Each uses the appropriate node graph:
 // kick = sine with pitch sweep; snare = triangle + bandpass noise; hat = HP noise.
@@ -1588,71 +2050,48 @@ function spawnSweep(x0, y0, x1, y1, kindKey) {
   return ev;
 }
 
-function playKickAt(seed, when, freq, gain) {
-  // Pitch sweeps from 1.5x → 0.5x fundamental over 60ms — that's the "thump"
-  const osc = audioCtx.createOscillator();
-  const env = audioCtx.createGain();
-  osc.type = 'sine';
-  const startFreq = Math.max(40, freq * 1.5);
-  const endFreq = Math.max(35, freq * 0.5);
-  osc.frequency.setValueAtTime(startFreq, when);
-  osc.frequency.exponentialRampToValueAtTime(endFreq, when + 0.060);
-  osc.connect(env);
-  routeFinalOutput(seed, env);
-  env.gain.setValueAtTime(0, when);
-  env.gain.linearRampToValueAtTime(gain * 1.4, when + 0.002);
-  env.gain.exponentialRampToValueAtTime(0.0008, when + 0.20);
-  osc.start(when); osc.stop(when + 0.25);
-  seed.lastPulseAt = when;
+// Legacy seed → patch shim. Older seeds (and snapshots from before the
+// voice/patch refactor) only carry the flat `harmonics + decay + attackMs
+// + synthesisModel` fields. Build a one-layer patch from those so the
+// new player can render them without us needing a database migration.
+function patchFromLegacySeed(seed) {
+  if (seed._cachedPatch) return seed._cachedPatch;
+  const model = seed.synthesisModel || 'additive';
+  let layers;
+  if (model === 'kick')       layers = [{ voice: 'kick',   gain: 1, params: {} }];
+  else if (model === 'snare') layers = [{ voice: 'snare',  gain: 1, params: {} }];
+  else if (model === 'hihat') layers = [{ voice: 'hihat',  gain: 1, params: {} }];
+  else                        layers = [{ voice: 'additive', gain: 1, params: { harmonics: seed.harmonics } }];
+  const category = (model === 'kick' || model === 'snare' || model === 'hihat') ? 'drum' : 'tonal';
+  const patch = {
+    layers,
+    envelope: { attackMs: seed.attackMs || 8, releaseMs: seed.decay || 400 },
+    category,
+  };
+  seed._cachedPatch = patch;
+  return patch;
 }
 
-function playHihatAt(seed, when, freq, gain) {
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = createNoiseBuffer(0.1);
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'highpass';
-  filter.frequency.value = 7000;
-  const env = audioCtx.createGain();
-  noise.connect(filter); filter.connect(env);
-  routeFinalOutput(seed, env);
-  env.gain.setValueAtTime(0, when);
-  env.gain.linearRampToValueAtTime(gain * 0.55, when + 0.001);
-  env.gain.exponentialRampToValueAtTime(0.0008, when + 0.045);
-  noise.start(when); noise.stop(when + 0.1);
-  seed.lastPulseAt = when;
-}
-
-function playSnareAt(seed, when, freq, gain) {
-  // Tonal component (triangle) + noise component (bandpass), both with sharp envelopes
-  const osc = audioCtx.createOscillator();
-  const oscEnv = audioCtx.createGain();
-  osc.type = 'triangle';
-  osc.frequency.value = Math.max(140, freq * 0.8);
-  osc.connect(oscEnv);
-
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = createNoiseBuffer(0.15);
-  const noiseFilter = audioCtx.createBiquadFilter();
-  noiseFilter.type = 'bandpass';
-  noiseFilter.frequency.value = 2200;
-  noiseFilter.Q.value = 0.7;
-  const noiseEnv = audioCtx.createGain();
-  noise.connect(noiseFilter); noiseFilter.connect(noiseEnv);
-
-  const mix = audioCtx.createGain();
-  oscEnv.connect(mix); noiseEnv.connect(mix);
-  routeFinalOutput(seed, mix);
-
-  oscEnv.gain.setValueAtTime(0, when);
-  oscEnv.gain.linearRampToValueAtTime(gain * 0.4, when + 0.001);
-  oscEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.08);
-  noiseEnv.gain.setValueAtTime(0, when);
-  noiseEnv.gain.linearRampToValueAtTime(gain * 0.65, when + 0.001);
-  noiseEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.12);
-
-  osc.start(when); osc.stop(when + 0.15);
-  noise.start(when); noise.stop(when + 0.15);
-  seed.lastPulseAt = when;
+// Build a representative 12-element harmonic profile from a patch for
+// the visual blob shape. Reads the first additive layer if present,
+// otherwise picks a tasteful default based on the dominant voice type.
+function harmonicsForPatch(patch) {
+  if (!patch || !patch.layers) return [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (const layer of patch.layers) {
+    if (layer.voice === 'additive' && layer.params && layer.params.harmonics) {
+      return layer.params.harmonics.slice();
+    }
+  }
+  const first = patch.layers[0];
+  if (!first) return [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
+  if (first.voice === 'subtractive') return [0.5, 0.25, 0.15, 0.10, 0.07, 0.05, 0.03, 0.02, 0.01, 0, 0, 0];
+  if (first.voice === 'fm')          return [0.3, 0.18, 0.12, 0.08, 0.10, 0.06, 0.08, 0.04, 0.06, 0.03, 0, 0];
+  if (first.voice === 'supersaw')    return [0.45, 0.22, 0.14, 0.09, 0.06, 0.04, 0.03, 0.02, 0.01, 0, 0, 0];
+  if (first.voice === 'noise')       return [0.10, 0.08, 0.06, 0.06, 0.08, 0.10, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01];
+  if (first.voice === 'kick')        return [0.7, 0.15, 0.05, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  if (first.voice === 'snare')       return [0.15, 0.12, 0.10, 0.20, 0.15, 0.10, 0.08, 0.06, 0.04, 0, 0, 0];
+  if (first.voice === 'hihat')       return [0.02, 0.03, 0.04, 0.05, 0.08, 0.12, 0.18, 0.20, 0.15, 0.10, 0.06, 0.04];
+  return [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
 }
 
 // === LIVE PLAY (sustained) ===
@@ -1667,32 +2106,13 @@ function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   // Retrigger if already held — release old, start fresh
   if (activeLiveNotes.has(midi)) liveNoteOff(midi);
-  // Live input never snaps to scale, regardless of source. The user
-  // pressed a specific key (MIDI keyboard / QWERTY / on-screen piano)
-  // — they get that pitch. Guardrails snap is reserved for "planting
-  // on the canvas": recording a phrase compresses it onto the scale
-  // grid before becoming a seed pattern.
+  // Live input never snaps to scale, regardless of source.
   const targetMidi = midi;
   const freq = freqFromMidi(targetMidi);
-  const osc = audioCtx.createOscillator();
-  const env = audioCtx.createGain();
-  setOscWave(osc, liveTimbre.harmonics);
-  osc.frequency.value = freq;
-  // Apply current pitch-bend so a note triggered mid-bend doesn't jump.
-  osc.detune.value = pitchBendCents;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = Math.min(8000, freq * 16);
-  filter.Q.value = 0.7;
-  osc.connect(filter); filter.connect(env); env.connect(masterGain);
-  const now = audioCtx.currentTime;
-  const attack = (liveTimbre.attackMs || 8) / 1000;
-  const sustainLevel = 0.25 * velocity;
-  env.gain.setValueAtTime(0, now);
-  env.gain.linearRampToValueAtTime(sustainLevel, now + attack);
-  // No automatic decay — sustain until liveNoteOff is called
-  osc.start(now);
-  activeLiveNotes.set(midi, { osc, env, targetMidi, sustainLevel });
+  const patch = liveTimbre.patch;
+  const handle = playPatch(patch, audioCtx.currentTime, freq, 0.25 * velocity, null, (n) => n.connect(masterGain));
+  if (handle && handle.detune) handle.detune(pitchBendCents, audioCtx.currentTime);
+  activeLiveNotes.set(midi, { handle, targetMidi });
   showFloatingNote(targetMidi);
   return targetMidi;
 }
@@ -1707,67 +2127,36 @@ function liveNoteOff(midi) {
   const note = activeLiveNotes.get(midi);
   if (!note) return;
   const now = audioCtx.currentTime;
-  const releaseTime = 0.15;
-  try {
-    // cancelAndHoldAtTime freezes the value of an in-flight ramp at `now`
-    // and discards events after it — the right primitive for "cut off the
-    // attack mid-rise and release from wherever we got to." Falls back to
-    // the older cancel+set pattern for engines that lack it.
-    const g = note.env.gain;
-    if (typeof g.cancelAndHoldAtTime === 'function') {
-      g.cancelAndHoldAtTime(now);
-    } else {
-      g.cancelScheduledValues(now);
-      g.setValueAtTime(g.value, now);
-    }
-    // Linear ramp to true zero — handles the case where the note-off
-    // arrives mid-attack (gain still near zero) without the exponential-
-    // from-zero quirk that would otherwise ramp upward and leave the
-    // note ringing. 150ms is short enough to feel snappy but long
-    // enough to avoid clicks.
-    g.linearRampToValueAtTime(0, now + releaseTime);
-    note.osc.stop(now + releaseTime + 0.05);
-  } catch (e) { /* osc may already be stopped */ }
+  try { note.handle.release(now); } catch (e) {}
   activeLiveNotes.delete(midi);
   releasingNotes.add(note);
-  setTimeout(() => releasingNotes.delete(note), (releaseTime + 0.1) * 1000);
+  // The patch envelope's releaseMs determines the tail length. Use a
+  // conservative upper bound so the bend-during-release Set drops
+  // entries well after the tail has gone silent.
+  setTimeout(() => releasingNotes.delete(note), 2000);
 }
 
 // Backwards-compat alias for any code still calling playLiveNote
 function playLiveNote(midi, velocity = 0.7) { return liveNoteOn(midi, velocity); }
 
 function playNoteAt(seed, when, freq, gain, sustainMs) {
-  // Drums dispatch to specialized paths and ignore sustainMs (they have built-in envelopes)
-  if (seed.synthesisModel === 'kick')  return playKickAt(seed, when, freq, gain);
-  if (seed.synthesisModel === 'snare') return playSnareAt(seed, when, freq, gain);
-  if (seed.synthesisModel === 'hihat') return playHihatAt(seed, when, freq, gain);
-  // Additive (tonal) path with attack → hold → release envelope.
-  // sustainMs = how long to hold at full gain; seed.decay = release time
-  const osc = audioCtx.createOscillator();
-  const env = audioCtx.createGain();
-  setOscWave(osc, seed.harmonics);
-  osc.frequency.value = freq;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = Math.min(8000, freq * 16);
-  filter.Q.value = 0.7;
-  osc.connect(filter); filter.connect(env);
-  routeFinalOutput(seed, env);
-  const a = (seed.attackMs || 8) / 1000;
-  const releaseSec = seed.decay / 1000;
-  // If no explicit sustain, behave like before (decay only — exponential fade)
-  const useSustain = sustainMs !== undefined && sustainMs !== null;
-  const sustainSec = useSustain ? Math.max(0, sustainMs / 1000 - a) : 0;
-  env.gain.setValueAtTime(0, when);
-  env.gain.linearRampToValueAtTime(gain, when + a);
-  if (useSustain && sustainSec > 0) {
-    env.gain.setValueAtTime(gain, when + a + sustainSec);
-    env.gain.exponentialRampToValueAtTime(0.0008, when + a + sustainSec + releaseSec);
-    osc.start(when); osc.stop(when + a + sustainSec + releaseSec + 0.05);
-  } else {
-    env.gain.exponentialRampToValueAtTime(0.0008, when + a + releaseSec);
-    osc.start(when); osc.stop(when + a + releaseSec + 0.05);
+  // All seeds dispatch through the patch player now. Drums (category:'drum')
+  // are handled as one-shot inside playPatch; the supplied sustainMs is
+  // honoured for the routing window but their internal envelopes are
+  // already baked into the voice. Tonal patches get attack → sustain →
+  // release shaped by `patch.envelope`.
+  const patch = seed.patch || patchFromLegacySeed(seed);
+  // If a tonal seed has a legacy `decay` that differs from the patch's
+  // releaseMs (e.g. user adjusted the length knob), prefer the live seed
+  // value so inspector tweaks keep working post-refactor.
+  if (patch.category !== 'drum' && seed.decay) {
+    patch.envelope = patch.envelope || {};
+    if (patch.envelope.releaseMs !== seed.decay) {
+      patch.envelope = { ...patch.envelope, releaseMs: seed.decay };
+      seed._cachedPatch = patch;
+    }
   }
+  playPatch(patch, when, freq, gain, sustainMs, (n) => routeFinalOutput(seed, n));
   seed.lastPulseAt = when;
 }
 
@@ -1919,10 +2308,10 @@ function applyPitchBend(normalised) {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
   for (const note of activeLiveNotes.values()) {
-    try { note.osc.detune.setTargetAtTime(pitchBendCents, now, 0.005); } catch (e) {}
+    try { note.handle.detune(pitchBendCents, now); } catch (e) {}
   }
   for (const note of releasingNotes) {
-    try { note.osc.detune.setTargetAtTime(pitchBendCents, now, 0.005); } catch (e) {}
+    try { note.handle.detune(pitchBendCents, now); } catch (e) {}
   }
 }
 
@@ -1938,11 +2327,14 @@ function setSustainPedal(down) {
 }
 
 // === Pad routing ===
-// MiniLab 3 pads sit on MIDI channel 10. Bank A (notes 36-43) keeps the
-// default behaviour of playing pitched live notes, so the pads remain a
-// finger-drumming surface. Bank B (notes 44-51) acts as a plant-mode
-// selector — pressing a Bank B pad is the same as clicking a chip in
-// the top bar. Bank switch is local-only on the device.
+// MiniLab 3 pads sit on MIDI channel 10.
+//   Bank A pads 1-4 (notes 36-39): play pitched live notes (drum surface).
+//   Bank A pads 5-8 (notes 40-43): transport — STOP, PLAY, REC, TAP.
+//     These pads are labelled with transport icons on the device in DAW
+//     mode, so mapping them to transport functions matches what the user
+//     sees printed under the pads.
+//   Bank B (notes 44-51): plant-mode selector. User switches banks on
+//     the device (local-only — no MIDI sent).
 const PAD_BANK_B_TO_PLANT = [
   'drop',   // pad 1 (note 44)
   'muffle', // pad 2 (note 45)
@@ -1953,6 +2345,41 @@ const PAD_BANK_B_TO_PLANT = [
   'ripple', // pad 7 (note 50)
   'cloud',  // pad 8 (note 51)
 ];
+
+// === Transport ===
+function transportStop() {
+  if (typeof isPlaying !== 'undefined' && isPlaying) {
+    document.getElementById('play-btn').click();
+  }
+}
+function transportPlay() {
+  if (typeof isPlaying !== 'undefined' && !isPlaying) {
+    document.getElementById('play-btn').click();
+  }
+}
+function transportRecord() {
+  document.getElementById('rec-btn').click();
+}
+// Tap tempo — average the last few inter-tap intervals and apply to BPM.
+// Stale taps drop after 4 seconds so a fresh series doesn't get poisoned
+// by an earlier abandoned attempt.
+const tapTempoTaps = [];
+function transportTap() {
+  const now = performance.now();
+  while (tapTempoTaps.length && now - tapTempoTaps[0] > 4000) tapTempoTaps.shift();
+  tapTempoTaps.push(now);
+  if (tapTempoTaps.length < 2) return;
+  let total = 0;
+  for (let i = 1; i < tapTempoTaps.length; i++) total += tapTempoTaps[i] - tapTempoTaps[i - 1];
+  const avgMs = total / (tapTempoTaps.length - 1);
+  const bpm = Math.round(60000 / avgMs);
+  if (bpm < 40 || bpm > 240) return;
+  setBPM(bpm);
+  const slider = document.getElementById('tempo-slider');
+  if (slider) slider.value = bpm;
+  const tempoVal = document.getElementById('tempo-val');
+  if (tempoVal) tempoVal.textContent = bpm + ' bpm';
+}
 
 // === MIDI debug log ===
 // Every incoming MIDI message is recorded so we can dump a trace
@@ -2116,7 +2543,16 @@ function handleMIDIMessage(evt) {
   // Notes
   if (cmd === 0x90 && data[2] > 0) {
     const note = data[1], velocity = data[2];
-    // MiniLab 3 pad bank B (channel 10, notes 44-51) selects plant mode
+    // MiniLab 3 pad bank A pads 5-8 = transport (stop/play/record/tap)
+    if (channel === 10 && note >= 40 && note <= 43) {
+      if (note === 40) transportStop();
+      else if (note === 41) transportPlay();
+      else if (note === 42) transportRecord();
+      else if (note === 43) transportTap();
+      flashMidiLED();
+      return;
+    }
+    // MiniLab 3 pad bank B selects plant mode
     if (channel === 10 && note >= 44 && note <= 51) {
       const kind = PAD_BANK_B_TO_PLANT[note - 44];
       if (kind) setPlantMode(kind);
@@ -2128,8 +2564,8 @@ function handleMIDIMessage(evt) {
   }
   if (cmd === 0x80 || (cmd === 0x90 && data[2] === 0)) {
     const note = data[1];
-    // Bank B pads are momentary mode-set; ignore their note-off.
-    if (channel === 10 && note >= 44 && note <= 51) return;
+    // Transport + bank B pads are momentary; ignore their note-off.
+    if (channel === 10 && note >= 40 && note <= 51) return;
     noteOff(note);
     return;
   }
@@ -2481,6 +2917,7 @@ function makeSeed(opts) {
     attackMs: opts.attackMs !== undefined ? opts.attackMs : 8,
     polyFactor: opts.polyFactor !== undefined ? opts.polyFactor : 2/3,
     muted: opts.muted || false,
+    patch: opts.patch || null,
   };
   if (!seed.color) {
     if (seed.kind === 'modifier') {
@@ -3192,6 +3629,7 @@ function finalizeTaps() {
     role: activeRole,
     synthesisModel: gen.synthesisModel,
     attackMs: gen.attackMs,
+    patch: gen.patch,
     quantize: true,
   });
   for (const m of seeds.filter(s => s.kind === 'modifier')) {
@@ -3426,6 +3864,8 @@ function selectSeed(id) {
         seed.decay = gen.decay;
         seed.attackMs = gen.attackMs;
         seed.synthesisModel = gen.synthesisModel;
+        seed.patch = gen.patch;
+        seed._cachedPatch = null;
         seed.role = opt.key;
         seed.color = TIMBRE_ROLES[opt.key].color;
         syncRenderedSeeds();
@@ -3777,6 +4217,8 @@ document.getElementById('regen-btn').addEventListener('click', () => {
   s.decay = gen.decay;
   s.attackMs = gen.attackMs;
   s.synthesisModel = gen.synthesisModel;
+  s.patch = gen.patch;
+  s._cachedPatch = null;
   syncRenderedSeeds();
   selectSeed(s.id);
   takeSnapshot('rerolled ' + s.label);
@@ -3864,6 +4306,7 @@ function takeSnapshot(label, immediate = false) {
         synthesisModel: s.synthesisModel,
         attackMs: s.attackMs,
         polyFactor: s.polyFactor,
+        patch: s.patch ? JSON.parse(JSON.stringify(s.patch)) : null,
       })),
       nextSeedId,
     };
