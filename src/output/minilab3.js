@@ -110,6 +110,32 @@ function setLed(id, r, g, b) {
   sendRaw([0x02, 0x02, 0x16, id, ...rgb7(r, g, b)]);
 }
 
+// LED diagnostic — run from DevTools as `murmurTestPads()`. Paints a
+// distinct 16-colour rainbow across both pad banks. If the device
+// shows the rainbow we know our SysEx reaches the LEDs. If it shows
+// all-white or all-off, the bytes aren't being interpreted. If only
+// the persistent IDs (0x34..0x4B) don't work, calling
+// `murmurTestPads(true)` retries with the transient IDs (0x04..0x1B)
+// which some firmware versions accept exclusively.
+function rainbow16() {
+  return [
+    '#ff0000', '#ff7f00', '#ffff00', '#7fff00',
+    '#00ff00', '#00ff7f', '#00ffff', '#007fff',
+    '#0000ff', '#7f00ff', '#ff00ff', '#ff007f',
+    '#ffffff', '#888888', '#444444', '#222222',
+  ];
+}
+function murmurTestPads(useTransientIds = false) {
+  const cols = rainbow16();
+  const aBase = useTransientIds ? 0x04 : 0x34;
+  const bBase = useTransientIds ? 0x14 : 0x44;
+  for (let i = 0; i < 8; i++) setLed(aBase + i, ...hex7(cols[i]));
+  for (let i = 0; i < 8; i++) setLed(bBase + i, ...hex7(cols[8 + i]));
+  console.log('[minilab] painted rainbow on pad IDs',
+    useTransientIds ? '0x04-0x1B (transient)' : '0x34-0x4B (persistent)');
+}
+if (typeof window !== 'undefined') window.murmurTestPads = murmurTestPads;
+
 // Parse a CSS hex colour to 7-bit RGB. The device's gamut is dimmer
 // than a screen, so we boost saturation slightly.
 function hex7(hex) {

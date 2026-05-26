@@ -35,8 +35,55 @@ export function transportStop() {
 export function transportPlay() {
   if (!state.isPlaying) document.getElementById('play-btn').click();
 }
+// MIDI Continue (0xFB) vs Start (0xFA): Continue should resume
+// without resetting playback position. We toggle isPlaying directly
+// rather than clicking the play button (whose handler resets
+// nextTrigger / patternIdx).
+export function transportContinue() {
+  if (state.isPlaying) return;
+  state.isPlaying = true;
+  const btn = document.getElementById('play-btn');
+  btn.textContent = '■ stop';
+  btn.classList.remove('primary');
+}
 export function transportRecord() {
   document.getElementById('rec-btn').click();
+}
+
+// === MIDI Clock (0xF8) → tempo sync ===
+// 24 ticks per quarter note is the MIDI spec. We keep a sliding
+// window of recent tick timestamps and derive BPM from their average
+// interval. Setting BPM every tick would be wasteful, so we update
+// only when the derived value moves by ≥1 BPM and at most every
+// quarter note (24 ticks).
+const CLOCK_TICKS_PER_BEAT = 24;
+const clockTicks = [];
+let lastAppliedBpm = 0;
+
+export function transportClockTick() {
+  const now = performance.now();
+  clockTicks.push(now);
+  // Keep at most 2 beats' worth (48 ticks) for averaging — long
+  // enough to smooth, short enough to follow tempo changes quickly.
+  if (clockTicks.length > CLOCK_TICKS_PER_BEAT * 2) clockTicks.shift();
+  if (clockTicks.length % CLOCK_TICKS_PER_BEAT !== 0) return;  // only act per quarter
+  if (clockTicks.length < CLOCK_TICKS_PER_BEAT) return;
+  const span = clockTicks[clockTicks.length - 1] - clockTicks[0];
+  const beats = (clockTicks.length - 1) / CLOCK_TICKS_PER_BEAT;
+  const bpm = Math.round(60000 * beats / span);
+  if (bpm < 40 || bpm > 240) return;
+  if (Math.abs(bpm - lastAppliedBpm) < 1) return;
+  lastAppliedBpm = bpm;
+  setBPM(bpm);
+  const slider = document.getElementById('tempo-slider');
+  if (slider) slider.value = bpm;
+}
+
+// Called by external MIDI Start so the clock-tick averager doesn't
+// carry stale timestamps across a stop / restart.
+export function transportClockReset() {
+  clockTicks.length = 0;
+  lastAppliedBpm = 0;
 }
 
 // Tap tempo — average the last few inter-tap intervals and apply to

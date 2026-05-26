@@ -15,7 +15,8 @@ import { liveTimbre, rollLiveTimbre } from './timbres.js';
 import { state, activeLiveNotes, releasingNotes, sustainedMidis } from './state.js';
 import { rescheduleRecordingAutoFinish } from './recording.js';
 import {
-  transportStop, transportPlay, transportRecord, transportTap,
+  transportStop, transportPlay, transportContinue, transportRecord,
+  transportTap, transportClockTick, transportClockReset,
 } from './transport.js';
 import { handleControlCC } from './controls.js';
 import {
@@ -170,6 +171,10 @@ function midiCmdName(status) {
 function logMIDI(evt, portName) {
   const bytes = Array.from(evt.data);
   const status = bytes[0] || 0;
+  // MIDI Clock (0xF8) fires 24× per beat — at 120 BPM that's 48/sec,
+  // and our 8000-entry ring buffer would fill in ~3 minutes of clock
+  // traffic alone. Skip from log unless verbose is on for debugging.
+  if (status === 0xF8 && !midiVerbose) return;
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
   const isSystem = status >= 0xf0;
@@ -364,12 +369,19 @@ function handleMIDIMessage(evt) {
     return;
   }
   // System Real-Time messages (single-byte, status 0xF8..0xFF).
-  // MiniLab 3 sends MIDI Start / Stop on Shift+Play / Shift+Stop —
-  // wire those into murmur's transport so the hardware shortcuts
-  // mirror the software ones.
-  if (status === 0xFA || status === 0xFB) { transportPlay(); return; }  // Start / Continue
-  if (status === 0xFC) { transportStop(); return; }                     // Stop
-  if (status >= 0xF0) return;  // ignore other system messages
+  // Each is wired to the most-natural app behaviour:
+  //   0xF8 Clock        — slave murmur's BPM to external master (derives
+  //                       tempo from tick interval, applied once/beat)
+  //   0xFA Start        — restart playback from beat 0
+  //   0xFB Continue     — resume playback without resetting position
+  //   0xFC Stop         — stop the scheduler
+  //   0xFE Active Sense — keepalive; intentionally ignored
+  //   0xFF Reset        — intentionally ignored (don't want surprise wipes)
+  if (status === 0xF8) { transportClockTick(); return; }
+  if (status === 0xFA) { transportClockReset(); transportPlay(); return; }
+  if (status === 0xFB) { transportContinue(); return; }
+  if (status === 0xFC) { transportStop(); return; }
+  if (status >= 0xF0) return;  // other system messages: ignore
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
   // Pitch bend (14-bit, lsb first)
