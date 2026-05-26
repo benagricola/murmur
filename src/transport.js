@@ -7,7 +7,7 @@ import { BPM, BAR_MS, setTempo } from './tempo.js';
 import { seeds, state } from './state.js';
 import {
   ensureAudio, audioCtx, supportsPeriodicWave,
-  setMasterVol, showAudioStatus, withTimeout, onContextCreated,
+  setMasterVol, showAudioStatus, onContextCreated,
 } from './audio/context.js';
 import { refreshPadLights, paintScreen } from './output/minilab3.js';
 
@@ -67,22 +67,23 @@ playBtn.addEventListener('click', async () => {
   const ctx = await ensureAudio();
   if (!ctx) return;
   if (state.isPlaying) {
+    // STOP: only tell the scheduler to stop creating new voices.
+    // DON'T suspend the AudioContext — that freezes in-flight
+    // oscillators mid-flight, so a subsequent START resumes them
+    // exactly where they were, producing the "ghost chord on start"
+    // bug. Letting state.isPlaying flip without touching the context
+    // lets existing voices play out their envelopes naturally over
+    // 1-2s and self-terminate via their scheduled osc.stop() calls.
     state.isPlaying = false;
-    try { await ctx.suspend(); } catch (e) {}
     playBtn.textContent = '▶ start';
     playBtn.classList.add('primary');
     showAudioStatus(ctx.state + ' · stopped');
     refreshPadLights(); paintScreen();
   } else {
+    // START: ensure the context is running, then enable the
+    // scheduler. ensureAudio (called above) already handles a
+    // suspended context, so we don't need a second resume here.
     state.isPlaying = true;
-    if (ctx.state === 'suspended') {
-      const result = await withTimeout(ctx.resume(), 1500, 'resume');
-      if (result.timeout || result.error) {
-        showAudioStatus('cannot resume · state=' + ctx.state, 'error');
-        state.isPlaying = false;
-        return;
-      }
-    }
     playBtn.textContent = '■ stop';
     playBtn.classList.remove('primary');
     state.playbackStartTime = ctx.currentTime + 0.04;

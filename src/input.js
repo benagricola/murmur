@@ -229,7 +229,10 @@ const midiOutputs = [];
 // talks to Analog Lab, DIN THRU is the physical 5-pin pass-through,
 // "Midi Through" is the linux system loopback. None of these are
 // what the user is playing.
-const MIDI_PORT_SKIP_PATTERN = /\b(mcu|hui|alv|din[ _-]?thru|midi[ _-]?through|thru)\b/i;
+// Linux's WebMIDI loopback exposes each of our outputs as a phantom
+// input named "WebMIDI output:Output connection NNN" — listening on
+// those just records our own outgoing SysEx as if it were a reply.
+const MIDI_PORT_SKIP_PATTERN = /\b(mcu|hui|alv|din[ _-]?thru|midi[ _-]?through|thru|webmidi)\b/i;
 
 export function setupMIDI() {
   if (!navigator.requestMIDIAccess) {
@@ -266,13 +269,17 @@ function refreshMIDIInputs() {
     inputCount++;
     if (!firstName) firstName = input.name || 'midi';
   }
-  // For outputs we DON'T apply the input skip pattern — some MiniLab 3
-  // firmware versions route lights/screen SysEx through the ALV port,
-  // not the main MIDI port. We collect every output and let
-  // output/minilab3.js spam SysEx to all of them; the device ignores
-  // bytes it doesn't understand.
+  // For outputs we keep MCU/HUI/ALV/DIN-THRU — some MiniLab firmware
+  // versions route lights/screen SysEx through the ALV port. But we
+  // still skip the linux WebMIDI loopback ports (which appear as
+  // outputs that mirror back to our own inputs) since spraying SysEx
+  // at them is wasteful and pollutes the log.
   midiOutputs.length = 0;
-  for (const output of midiAccess.outputs.values()) midiOutputs.push(output);
+  const OUTPUT_SKIP = /\bwebmidi\b/i;
+  for (const output of midiAccess.outputs.values()) {
+    if (OUTPUT_SKIP.test(output.name || '')) continue;
+    midiOutputs.push(output);
+  }
   const led = document.getElementById('midi-led');
   const label = document.getElementById('midi-label');
   if (inputCount > 0) {
@@ -356,6 +363,13 @@ function handleMIDIMessage(evt) {
     parseSysExReply(data);
     return;
   }
+  // System Real-Time messages (single-byte, status 0xF8..0xFF).
+  // MiniLab 3 sends MIDI Start / Stop on Shift+Play / Shift+Stop —
+  // wire those into murmur's transport so the hardware shortcuts
+  // mirror the software ones.
+  if (status === 0xFA || status === 0xFB) { transportPlay(); return; }  // Start / Continue
+  if (status === 0xFC) { transportStop(); return; }                     // Stop
+  if (status >= 0xF0) return;  // ignore other system messages
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
   // Pitch bend (14-bit, lsb first)
