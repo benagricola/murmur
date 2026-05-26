@@ -23,6 +23,28 @@ import {
   onContextCreated,
 } from './audio/context.js';
 import { VOICES, playPatch } from './audio/voices.js';
+import {
+  setupRippleChain, setupCloudChain, createReverbIR, setupModifierChain,
+} from './audio/chains.js';
+import {
+  BOMB_KINDS, SWEEP_KINDS, bombCurrentRadius, activeBombsAffecting,
+  routeFinalOutput, routeToModifiers, spawnBomb, spawnSweep,
+} from './audio/events.js';
+import {
+  seeds, activeEvents, snapshots,
+  activeLiveNotes, releasingNotes, sustainedMidis,
+  state, seedById,
+} from './state.js';
+import {
+  SVGNS, canvasEl, canvasWrap, spheresLayer, tethersLayer, seedsLayer,
+  tapMarkersLayer, seedNodes,
+  PEAK_STRENGTH, PEAK_WIDTH, PEAK_TIP_FACTOR,
+  makeSeed, removeSeed, radiusForFundamental, blobPath, attachmentsForSeed,
+  renderSeed, renderSpheres, renderTethers, syncRenderedSeeds,
+} from './seeds.js';
+import {
+  playNoteAt, playSeedStep, scheduleAhead, setStepHighlightHandler,
+} from './scheduler.js';
 
 // High-level tempo change — updates state via setTempo, then rescales
 // each seed's bar-fraction-derived timings (intervalMs, decay, attack,
@@ -54,17 +76,7 @@ function setBPM(newBPM) {
 //  STATE
 // =========================================================================
 //
-let guardrails = true;
-let isRecording = false;
-let recordingBuffer = null;  // { startTime, notes: [{midi, t, velocity}], lastNoteTime }
 const RECORD_AUTO_FINISH_MS = 1500;  // stop after this much silence
-
-const seeds = [];
-let nextSeedId = 1;
-let selectedSeedId = null;
-let plantMode = 'voice';
-
-function seedById(id) { return seeds.find(s => s.id === id); }
 
 //
 // =========================================================================
@@ -72,15 +84,6 @@ function seedById(id) { return seeds.find(s => s.id === id); }
 //  bootstrap. The rest of the audio surface lives in ./audio/.
 // =========================================================================
 //
-let isPlaying = false;
-let playbackStartTime = 0;
-
-// When the AudioContext is first created, attach modifier audio chains
-// for any seeds that were planted before audio came online (the demo
-// composition lands on the canvas before the user has interacted).
-onContextCreated(() => {
-  for (const s of seeds) setupModifierChain(s);
-});
 
 // Try creating the context on first user gesture so audio is ready by
 // the time the scheduler fires. tryCreateContext is idempotent.
@@ -93,197 +96,12 @@ function handleFirstInteraction() {
 document.addEventListener('pointerdown', handleFirstInteraction, { capture: true });
 document.addEventListener('keydown', handleFirstInteraction, { capture: true });
 document.addEventListener('touchstart', handleFirstInteraction, { capture: true });
-function setupRippleChain(rippleSeed) {
-  if (rippleSeed.delayInput) return;
-  const input = audioCtx.createGain();
-  const delay = audioCtx.createDelay(3.0);
-  delay.delayTime.value = (rippleSeed.delayMs || 469) / 1000;
-  const feedback = audioCtx.createGain(); feedback.gain.value = 0.42;
-  const wet = audioCtx.createGain(); wet.gain.value = 0.55;
-  input.connect(delay); delay.connect(wet); wet.connect(masterGain);
-  delay.connect(feedback); feedback.connect(delay);
-  rippleSeed.delayInput = input;
-  rippleSeed.delayNode = delay;
-}
-
-// Cloud = reverb modifier. Uses ConvolverNode with a procedurally generated
-// impulse response (exponentially decaying noise).
-function createReverbIR(durationSec) {
-  const sampleRate = audioCtx.sampleRate;
-  const length = Math.floor(sampleRate * Math.max(0.1, durationSec));
-  const ir = audioCtx.createBuffer(2, length, sampleRate);
-  for (let ch = 0; ch < 2; ch++) {
-    const data = ir.getChannelData(ch);
-    for (let i = 0; i < length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2.0);
-    }
-  }
-  return ir;
-}
-
-function setupCloudChain(cloudSeed) {
-  if (cloudSeed.reverbInput) return;
-  const input = audioCtx.createGain();
-  const convolver = audioCtx.createConvolver();
-  convolver.buffer = createReverbIR(cloudSeed.reverbSec || 2.0);
-  const wet = audioCtx.createGain();
-  wet.gain.value = 0.50;
-  input.connect(convolver);
-  convolver.connect(wet);
-  wet.connect(masterGain);
-  cloudSeed.reverbInput = input;
-  cloudSeed.convolver = convolver;
-}
-
-function setupModifierChain(seed) {
-  if (seed.kind !== 'modifier' || !audioCtx) return;
-  if (seed.modifierKind === 'ripple') setupRippleChain(seed);
-  if (seed.modifierKind === 'cloud') setupCloudChain(seed);
-}
-
-// Route a node into any modifier audio chains capturing this seed.
-// Centralized so kick/snare/hat/additive all participate in cloud/ripple effects.
-// Voices can be captured by multiple modifiers — fan out to all relevant chains.
-// === EVENTS (one-shot temporal effects) ===
-// Bombs: expanding regions of "effect applied". On reaching max radius they
-// pop — effect ceases instantly everywhere — and trigger an echo flash on
-// affected seeds. New event kinds plug in via BOMB_KINDS below.
-const activeEvents = [];
-let nextEventId = 1;
-
-const BOMB_KINDS = {
-  drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, durationBars: 1 },
-  muffle: { label: 'muffle', color: '#5e7ad8', maxRadius: 360, durationBars: 1 },
-  thin:   { label: 'thin',   color: '#ffd84d', maxRadius: 360, durationBars: 1 },
-};
-
-// Sweeps are directional lines that travel from start→end over a fixed musical duration.
-// As the wavefront passes each voice, the voice's mute state is committed (persists
-// after the sweep completes — unlike bombs which snap back at pop).
-const SWEEP_KINDS = {
-  rise: { label: 'rise', color: '#5af095', durationBars: 4, action: 'unmute' },
-  fade: { label: 'fade', color: '#ff7a8c', durationBars: 4, action: 'mute' },
-};
-
-function bombCurrentRadius(ev) {
-  if (ev.state !== 'expanding') return ev.maxRadius;
-  const elapsedMs = performance.now() - ev.startTimeMs;
-  const phase = Math.min(1, elapsedMs / ev.durationMs);
-  return ev.maxRadius * phase;
-}
-
-// Return any bombs whose current radius contains this seed.
-function activeBombsAffecting(seed) {
-  const out = [];
-  for (const ev of activeEvents) {
-    if (ev.state !== 'expanding') continue;
-    const r = bombCurrentRadius(ev);
-    if (Math.hypot(seed.cx - ev.cx, seed.cy - ev.cy) <= r) out.push(ev);
-  }
-  return out;
-}
-
-// Centralized output routing. Replaces the previous masterGain+routeToModifiers
-// dance. Handles bomb effects, mod sends, master output in one place.
-function routeFinalOutput(seed, node) {
-  const bombs = activeBombsAffecting(seed);
-  // Mute (drop) bomb takes priority — silence the note entirely
-  const muteBomb = bombs.find(b => b.kind === 'drop');
-  if (!muteBomb) {
-    // Filter bombs route the dry signal through their filter node
-    const filterBomb = bombs.find(b => b.filterNode);
-    if (filterBomb) node.connect(filterBomb.filterNode);
-    else node.connect(masterGain);
-    // Modifier sends are parallel — they still fire even if a filter bomb is active
-    if (seed.capturedByIds && seed.capturedByIds.size > 0) {
-      for (const id of seed.capturedByIds) {
-        const m = seedById(id);
-        if (!m) continue;
-        if (m.modifierKind === 'ripple' && m.delayInput) node.connect(m.delayInput);
-        if (m.modifierKind === 'cloud'  && m.reverbInput) node.connect(m.reverbInput);
-      }
-    }
-  }
-  // If muteBomb is active, we don't connect to anything. Note plays silently.
-}
-
-// Legacy alias kept for any callers that didn't get updated
-function routeToModifiers(seed, node) {
-  if (!seed.capturedByIds || seed.capturedByIds.size === 0) return;
-  for (const id of seed.capturedByIds) {
-    const m = seedById(id);
-    if (!m) continue;
-    if (m.modifierKind === 'ripple' && m.delayInput) node.connect(m.delayInput);
-    if (m.modifierKind === 'cloud'  && m.reverbInput) node.connect(m.reverbInput);
-  }
-}
-
-function spawnBomb(cx, cy, kindKey) {
-  if (!audioCtx) initAudio();
-  const def = BOMB_KINDS[kindKey];
-  if (!def) return null;
-  const ev = {
-    id: nextEventId++,
-    type: 'bomb',
-    kind: kindKey,
-    color: def.color,
-    cx, cy,
-    maxRadius: def.maxRadius,
-    durationMs: def.durationBars * BAR_MS,
-    startTimeMs: performance.now(),
-    state: 'expanding',           // 'expanding' → 'popped' → 'done'
-    popTimeMs: null,
-    affectedSeedIds: new Set(),
-    filterNode: null,
-  };
-  // Build audio effect chain for filter bombs
-  if (audioCtx && masterGain) {
-    if (kindKey === 'muffle') {
-      const f = audioCtx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = 380;  // heavy muffle
-      f.Q.value = 0.9;
-      f.connect(masterGain);
-      ev.filterNode = f;
-    } else if (kindKey === 'thin') {
-      const f = audioCtx.createBiquadFilter();
-      f.type = 'highpass';
-      f.frequency.value = 2400;  // bright thin
-      f.Q.value = 0.9;
-      f.connect(masterGain);
-      ev.filterNode = f;
-    }
-  }
-  activeEvents.push(ev);
-  return ev;
-}
-
-function spawnSweep(x0, y0, x1, y1, kindKey) {
-  const def = SWEEP_KINDS[kindKey];
-  if (!def) return null;
-  // Reject tiny sweeps that probably came from a stray click rather than a drag
-  if (Math.hypot(x1 - x0, y1 - y0) < 30) return null;
-  const ev = {
-    id: nextEventId++,
-    type: 'sweep',
-    kind: kindKey,
-    color: def.color,
-    x0, y0, x1, y1,
-    durationMs: def.durationBars * BAR_MS,
-    startTimeMs: performance.now(),
-    state: 'active',  // 'active' → 'done' (then removed after 500ms)
-    affectedSeedIds: new Set(),
-  };
-  activeEvents.push(ev);
-  return ev;
-}
 
 // === LIVE PLAY (sustained) ===
 // noteOn creates an oscillator + envelope and stores them in activeLiveNotes
 // keyed by INPUT midi (the raw key the user pressed). noteOff fires the
 // release ramp and stops the oscillator after release. Holding a key produces
 // a sustained note; releasing it produces a release tail.
-const activeLiveNotes = new Map();
 
 function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   if (!audioCtx) { initAudio(); return midi; }
@@ -295,7 +113,7 @@ function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   const freq = freqFromMidi(targetMidi);
   const patch = liveTimbre.patch;
   const handle = playPatch(patch, audioCtx.currentTime, freq, 0.25 * velocity, null, (n) => n.connect(masterGain));
-  if (handle && handle.detune) handle.detune(pitchBendCents, audioCtx.currentTime);
+  if (handle && handle.detune) handle.detune(state.pitchBendCents, audioCtx.currentTime);
   activeLiveNotes.set(midi, { handle, targetMidi });
   showFloatingNote(targetMidi);
   return targetMidi;
@@ -305,7 +123,6 @@ function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
 // reachable so pitch-bend updates during the decay tail continue to take
 // effect — otherwise bending the strip stops working the moment you lift
 // your finger off the key, which feels broken on a real keyboard.
-const releasingNotes = new Set();
 
 function liveNoteOff(midi) {
   const note = activeLiveNotes.get(midi);
@@ -323,84 +140,6 @@ function liveNoteOff(midi) {
 // Backwards-compat alias for any code still calling playLiveNote
 function playLiveNote(midi, velocity = 0.7) { return liveNoteOn(midi, velocity); }
 
-function playNoteAt(seed, when, freq, gain, sustainMs) {
-  // All seeds dispatch through the patch player now. Drums (category:'drum')
-  // are handled as one-shot inside playPatch; the supplied sustainMs is
-  // honoured for the routing window but their internal envelopes are
-  // already baked into the voice. Tonal patches get attack → sustain →
-  // release shaped by `patch.envelope`.
-  const patch = seed.patch || patchFromLegacySeed(seed);
-  // If a tonal seed has a legacy `decay` that differs from the patch's
-  // releaseMs (e.g. user adjusted the length knob), prefer the live seed
-  // value so inspector tweaks keep working post-refactor.
-  if (patch.category !== 'drum' && seed.decay) {
-    patch.envelope = patch.envelope || {};
-    if (patch.envelope.releaseMs !== seed.decay) {
-      patch.envelope = { ...patch.envelope, releaseMs: seed.decay };
-      seed._cachedPatch = patch;
-    }
-  }
-  playPatch(patch, when, freq, gain, sustainMs, (n) => routeFinalOutput(seed, n));
-  seed.lastPulseAt = when;
-}
-
-function playSeedStep(seed, when) {
-  if (!seed.pattern || seed.pattern.length === 0) {
-    playNoteAt(seed, when, seed.fundamental, seed.gain || 0.35);
-    return;
-  }
-  const stepIdx = seed.patternIdx % seed.pattern.length;
-  const step = seed.pattern[stepIdx];
-  seed.patternIdx = stepIdx + 1;
-  const delayMs = Math.max(0, (when - audioCtx.currentTime) * 1000);
-  setTimeout(() => {
-    seed.currentStep = stepIdx;
-    if (selectedSeedId === seed.id) highlightCurrentStep(seed);
-  }, delayMs);
-  if (step.velocity < 0.05) return;
-  const baseMidi = midiFromFreq(seed.fundamental);
-  const baseGain = seed.gain || 0.35;
-  // Play primary
-  const targetMidi = baseMidi + (step.offset || 0);
-  const finalMidi = seed.quantize ? snapToScale(targetMidi) : targetMidi;
-  const freq = freqFromMidi(finalMidi);
-  const sustainMs = step.duration !== undefined ? step.duration * seed.intervalMs : undefined;
-  playNoteAt(seed, when, freq, baseGain * step.velocity, sustainMs);
-  // Play extras (chord tones) simultaneously
-  if (step.extras && step.extras.length > 0) {
-    for (const ex of step.extras) {
-      const exMidi = baseMidi + (ex.offset || 0);
-      const exFinalMidi = seed.quantize ? snapToScale(exMidi) : exMidi;
-      const exFreq = freqFromMidi(exFinalMidi);
-      const exSustainMs = ex.duration !== undefined ? ex.duration * seed.intervalMs : sustainMs;
-      playNoteAt(seed, when, exFreq, baseGain * (ex.velocity !== undefined ? ex.velocity : step.velocity), exSustainMs);
-    }
-    // Record this chord step for blob visualization. Only chord steps trigger
-    // outlines — single-note steps stay represented by the seed body alone.
-    if (!seed._chordVoices) seed._chordVoices = [];
-    const sustainSec = (sustainMs !== undefined ? sustainMs : seed.decay) / 1000;
-    const releaseSec = seed.decay / 1000;
-    seed._chordVoices.push({
-      offset: step.offset || 0,
-      startedAt: when,
-      sustainSec,
-      releaseSec,
-    });
-    for (const ex of step.extras) {
-      const exSusSec = (ex.duration !== undefined ? ex.duration * seed.intervalMs : sustainMs) / 1000;
-      seed._chordVoices.push({
-        offset: ex.offset || 0,
-        startedAt: when,
-        sustainSec: exSusSec || sustainSec,
-        releaseSec,
-      });
-    }
-    // Cap to prevent runaway accumulation on long loops
-    if (seed._chordVoices.length > 30) {
-      seed._chordVoices = seed._chordVoices.slice(-30);
-    }
-  }
-}
 
 //
 // =========================================================================
@@ -410,18 +149,18 @@ function playSeedStep(seed, when) {
 //
 function noteOn(midi, velocity, source = 'qwerty') {
   // If recording, push this note into the buffer.
-  if (isRecording) {
-    if (!recordingBuffer) {
-      recordingBuffer = { startTime: performance.now(), notes: [], lastActivityMs: performance.now() };
+  if (state.isRecording) {
+    if (!state.recordingBuffer) {
+      state.recordingBuffer = { startTime: performance.now(), notes: [], lastActivityMs: performance.now() };
     }
-    recordingBuffer.notes.push({
+    state.recordingBuffer.notes.push({
       midi,
-      t: performance.now() - recordingBuffer.startTime,
+      t: performance.now() - state.recordingBuffer.startTime,
       velocity,
       noteOnMs: performance.now(),
       duration: null,  // filled in on noteOff
     });
-    recordingBuffer.lastActivityMs = performance.now();
+    state.recordingBuffer.lastActivityMs = performance.now();
     rescheduleRecordingAutoFinish();
   }
   const playedMidi = liveNoteOn(midi, velocity, source);
@@ -433,15 +172,15 @@ function noteOn(midi, velocity, source = 'qwerty') {
 
 function noteOff(midi) {
   // Capture duration during recording — find the most recent open note with this midi
-  if (isRecording && recordingBuffer) {
-    for (let i = recordingBuffer.notes.length - 1; i >= 0; i--) {
-      const note = recordingBuffer.notes[i];
+  if (state.isRecording && state.recordingBuffer) {
+    for (let i = state.recordingBuffer.notes.length - 1; i >= 0; i--) {
+      const note = state.recordingBuffer.notes[i];
       if (note.midi === midi && note.duration === null) {
         note.duration = performance.now() - note.noteOnMs;
         break;
       }
     }
-    recordingBuffer.lastActivityMs = performance.now();
+    state.recordingBuffer.lastActivityMs = performance.now();
     rescheduleRecordingAutoFinish();
   }
   // Sustain pedal: defer audible release until the pedal lifts. The
@@ -449,7 +188,7 @@ function noteOff(midi) {
   // time, so the recorded duration reflects the keypress, not the
   // sustained tail — matching standard MIDI-piano convention.
   highlightPianoKey(midi, false);
-  if (sustainPedalDown && activeLiveNotes.has(midi)) {
+  if (state.sustainPedalDown && activeLiveNotes.has(midi)) {
     sustainedMidis.add(midi);
     return;
   }
@@ -459,20 +198,20 @@ function noteOff(midi) {
 // Auto-finish recording when there's been no activity AND no keys held.
 // Without the held-keys check, holding a long note would falsely auto-finish.
 function rescheduleRecordingAutoFinish() {
-  if (!recordingBuffer) return;
-  clearTimeout(recordingBuffer.silenceTimer);
-  recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, RECORD_AUTO_FINISH_MS);
+  if (!state.recordingBuffer) return;
+  clearTimeout(state.recordingBuffer.silenceTimer);
+  state.recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, RECORD_AUTO_FINISH_MS);
 }
 function checkAutoFinishRecording() {
-  if (!isRecording || !recordingBuffer) return;
+  if (!state.isRecording || !state.recordingBuffer) return;
   if (activeLiveNotes.size > 0) {
     // Keys still held — recheck in 100ms
-    recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, 100);
+    state.recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, 100);
     return;
   }
-  const sinceActivity = performance.now() - recordingBuffer.lastActivityMs;
+  const sinceActivity = performance.now() - state.recordingBuffer.lastActivityMs;
   if (sinceActivity < RECORD_AUTO_FINISH_MS) {
-    recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, RECORD_AUTO_FINISH_MS - sinceActivity + 50);
+    state.recordingBuffer.silenceTimer = setTimeout(checkAutoFinishRecording, RECORD_AUTO_FINISH_MS - sinceActivity + 50);
     return;
   }
   finishRecording();
@@ -484,26 +223,23 @@ const midiOutputs = [];  // populated by refreshMIDIInputs; reserved for SysEx l
 
 // === Expressive controls (pitch bend, sustain) ===
 const PITCH_BEND_RANGE_SEMITONES = 2;   // standard default
-let pitchBendCents = 0;
 function applyPitchBend(normalised) {
   // normalised in [-1, +1]. Convert to cents and push to every held and
   // releasing note so the bend follows through into the decay tail.
-  pitchBendCents = normalised * PITCH_BEND_RANGE_SEMITONES * 100;
+  state.pitchBendCents = normalised * PITCH_BEND_RANGE_SEMITONES * 100;
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
   for (const note of activeLiveNotes.values()) {
-    try { note.handle.detune(pitchBendCents, now); } catch (e) {}
+    try { note.handle.detune(state.pitchBendCents, now); } catch (e) {}
   }
   for (const note of releasingNotes) {
-    try { note.handle.detune(pitchBendCents, now); } catch (e) {}
+    try { note.handle.detune(state.pitchBendCents, now); } catch (e) {}
   }
 }
 
-let sustainPedalDown = false;
-const sustainedMidis = new Set();
 function setSustainPedal(down) {
-  if (down === sustainPedalDown) return;
-  sustainPedalDown = down;
+  if (down === state.sustainPedalDown) return;
+  state.sustainPedalDown = down;
   if (!down) {
     for (const m of sustainedMidis) liveNoteOff(m);
     sustainedMidis.clear();
@@ -532,12 +268,12 @@ const PAD_BANK_B_TO_PLANT = [
 
 // === Transport ===
 function transportStop() {
-  if (typeof isPlaying !== 'undefined' && isPlaying) {
+  if (typeof state.isPlaying !== 'undefined' && state.isPlaying) {
     document.getElementById('play-btn').click();
   }
 }
 function transportPlay() {
-  if (typeof isPlaying !== 'undefined' && !isPlaying) {
+  if (typeof state.isPlaying !== 'undefined' && !state.isPlaying) {
     document.getElementById('play-btn').click();
   }
 }
@@ -890,9 +626,9 @@ function showFloatingNote(midi) {
 // =========================================================================
 //
 function startRecording() {
-  if (isRecording) return;
-  isRecording = true;
-  recordingBuffer = null;
+  if (state.isRecording) return;
+  state.isRecording = true;
+  state.recordingBuffer = null;
   document.getElementById('rec-btn').classList.add('recording');
   document.getElementById('rec-btn').textContent = '■ stop';
   // Show overlay
@@ -904,23 +640,23 @@ function startRecording() {
 }
 
 function finishRecording() {
-  if (!isRecording) return;
-  isRecording = false;
+  if (!state.isRecording) return;
+  state.isRecording = false;
   document.getElementById('rec-btn').classList.remove('recording');
   document.getElementById('rec-btn').textContent = '● record';
   const ov = document.getElementById('rec-overlay');
   if (ov) ov.remove();
 
-  if (!recordingBuffer || recordingBuffer.notes.length === 0) {
+  if (!state.recordingBuffer || state.recordingBuffer.notes.length === 0) {
     return;
   }
-  const result = phraseFromRecording(recordingBuffer);
-  recordingBuffer = null;
+  const result = phraseFromRecording(state.recordingBuffer);
+  state.recordingBuffer = null;
 
   if (!result) return;
 
   // If a voice seed is selected, overwrite its pattern; otherwise plant new.
-  const sel = seedById(selectedSeedId);
+  const sel = seedById(state.selectedSeedId);
   if (sel && sel.kind === 'voice') {
     sel.pattern = result.pattern;
     sel.intervalMs = result.intervalMs;
@@ -945,8 +681,8 @@ function phraseFromRecording(buf) {
   const fundamentalMidi = midis[Math.floor(midis.length / 2)];
   const fundamentalFreq = freqFromMidi(fundamentalMidi);
 
-  const stepMs = guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
-  const maxSteps = guardrails ? 16 : 32;
+  const stepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
+  const maxSteps = state.guardrails ? 16 : 32;
   const totalSpan = Math.max(...notes.map(n => n.t)) + stepMs;
   const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
 
@@ -974,7 +710,7 @@ function phraseFromRecording(buf) {
     // Sort ascending by pitch — lowest is the primary (chord root)
     notes.sort((a, b) => a.midi - b.midi);
     const noteToFields = (nn) => {
-      const useMidi = guardrails ? snapToScale(nn.midi) : nn.midi;
+      const useMidi = state.guardrails ? snapToScale(nn.midi) : nn.midi;
       return {
         offset: useMidi - fundamentalMidi,
         velocity: Math.max(0.3, Math.min(1.0, nn.velocity * 1.3)),
@@ -1041,639 +777,9 @@ function plantRecordedSeed(result) {
 
 document.getElementById('rec-btn').addEventListener('click', async () => {
   await initAudio();
-  if (isRecording) finishRecording();
+  if (state.isRecording) finishRecording();
   else startRecording();
 });
-
-//
-// =========================================================================
-//  SEED MODEL & RENDERING (mostly unchanged from v3)
-// =========================================================================
-//
-function makeSeed(opts) {
-  const seed = {
-    id: nextSeedId++,
-    kind: opts.kind || 'voice',
-    modifierKind: opts.modifierKind,
-    cx: opts.cx, cy: opts.cy,
-    r: opts.r || 40,
-    color: opts.color,
-    fundamental: opts.fundamental || 220,
-    decay: opts.decay || 500,
-    intervalMs: opts.intervalMs || BEAT_MS,
-    harmonics: opts.harmonics ? opts.harmonics.slice() : new Array(NUM_HARMONICS).fill(0),
-    gain: opts.gain || 0.32,
-    label: opts.label || (opts.kind === 'modifier' ? opts.modifierKind : 'seed'),
-    pattern: opts.pattern
-      ? opts.pattern.map(s => {
-          const copy = {
-            offset: s.offset || 0,
-            velocity: s.velocity !== undefined ? s.velocity : 1.0,
-          };
-          if (s.duration !== undefined) copy.duration = s.duration;
-          if (s.extras && s.extras.length > 0) {
-            copy.extras = s.extras.map(e => ({
-              offset: e.offset || 0,
-              velocity: e.velocity !== undefined ? e.velocity : 1.0,
-              duration: e.duration,
-            }));
-          }
-          return copy;
-        })
-      : [{ offset: 0, velocity: 1.0 }],
-    patternIdx: 0,
-    currentStep: -1,
-    nextTrigger: 0,
-    lastPulseAt: 0,
-    quantize: opts.quantize !== undefined ? opts.quantize : true,
-    capturedByIds: new Set(),
-    capturedSeedIds: new Set(),
-    sphereR: opts.sphereR || 0,
-    delayMs: opts.delayMs || 469,
-    reverbSec: opts.reverbSec || 2.0,
-    delayInput: null,
-    delayNode: null,
-    reverbInput: null,
-    convolver: null,
-    role: opts.role || null,
-    swing: opts.swing !== undefined ? opts.swing : 0.5,
-    synthesisModel: opts.synthesisModel || 'additive',
-    attackMs: opts.attackMs !== undefined ? opts.attackMs : 8,
-    polyFactor: opts.polyFactor !== undefined ? opts.polyFactor : 2/3,
-    muted: opts.muted || false,
-    patch: opts.patch || null,
-  };
-  if (!seed.color) {
-    if (seed.kind === 'modifier') {
-      if (seed.modifierKind === 'weave') seed.color = WEAVE_COLOR;
-      else if (seed.modifierKind === 'ripple') seed.color = RIPPLE_COLOR;
-      else if (seed.modifierKind === 'cloud') seed.color = CLOUD_COLOR;
-      else if (seed.modifierKind === 'poly') seed.color = POLY_COLOR;
-    } else {
-      seed.color = (seed.role && TIMBRE_ROLES[seed.role])
-        ? TIMBRE_ROLES[seed.role].color
-        : SEED_COLORS[seeds.length % SEED_COLORS.length];
-    }
-  }
-  setupModifierChain(seed);
-  seeds.push(seed);
-  return seed;
-}
-
-function removeSeed(id) {
-  const seed = seedById(id);
-  if (!seed) return;
-  if (seed.kind === 'modifier') {
-    for (const vid of seed.capturedSeedIds) {
-      const v = seedById(vid);
-      if (v) v.capturedByIds.delete(id);
-    }
-  }
-  if (seed.kind === 'voice' && seed.capturedByIds) {
-    for (const modId of seed.capturedByIds) {
-      const m = seedById(modId);
-      if (m) m.capturedSeedIds.delete(id);
-    }
-  }
-  const i = seeds.findIndex(s => s.id === id);
-  if (i >= 0) seeds.splice(i, 1);
-  if (selectedSeedId === id) {
-    selectedSeedId = null;
-    document.getElementById('inspector').classList.remove('open');
-  }
-}
-
-function radiusForFundamental(hz) {
-  return Math.max(18, Math.min(80, 50 + (220 - hz) / 8));
-}
-
-function blobPath(cx, cy, baseR, harmonicAmps, attachments) {
-  const N = 128;
-  const pts = [];
-  for (let i = 0; i < N; i++) {
-    const theta = (i / N) * Math.PI * 2;
-    let r = baseR;
-    for (let h = 0; h < harmonicAmps.length; h++) {
-      const amp = harmonicAmps[h];
-      if (amp) r += baseR * amp * 0.55 * Math.cos((h + 2) * theta);
-    }
-    if (attachments) {
-      for (const a of attachments) {
-        let d = Math.abs(((theta - a.angle + Math.PI) % (Math.PI * 2)) - Math.PI);
-        r += baseR * a.strength * Math.exp(-(d * d) / (2 * a.width * a.width));
-      }
-    }
-    pts.push([cx + r * Math.cos(theta), cy + r * Math.sin(theta)]);
-  }
-  let d = `M ${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
-  for (let i = 0; i < N; i++) {
-    const p0 = pts[(i - 1 + N) % N], p1 = pts[i], p2 = pts[(i + 1) % N], p3 = pts[(i + 2) % N];
-    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
-  }
-  return d + ' Z';
-}
-
-// Compute deformation peaks for a voice seed based on what's capturing it.
-// Strength chosen to be larger than any natural harmonic variation so peaks
-// are clearly visible as tendrils growing toward the capturing modifier.
-const PEAK_STRENGTH = 0.30;
-const PEAK_WIDTH = 0.08;
-const PEAK_TIP_FACTOR = 1 + PEAK_STRENGTH + 0.02;
-
-function attachmentsForSeed(seed) {
-  if (!seed || seed.kind !== 'voice' || !seed.capturedByIds || seed.capturedByIds.size === 0) return null;
-  const atts = [];
-  for (const id of seed.capturedByIds) {
-    const m = seedById(id);
-    if (!m) continue;
-    atts.push({
-      angle: Math.atan2(m.cy - seed.cy, m.cx - seed.cx),
-      strength: PEAK_STRENGTH,
-      width: PEAK_WIDTH,
-    });
-  }
-  return atts;
-}
-
-const SVGNS = 'http://www.w3.org/2000/svg';
-const canvasEl = document.getElementById('canvas');
-const canvasWrap = document.getElementById('canvas-wrap');
-const spheresLayer = document.getElementById('spheres-layer');
-const tethersLayer = document.getElementById('tethers-layer');
-const seedsLayer = document.getElementById('seeds-layer');
-const tapMarkersLayer = document.getElementById('tap-markers');
-const seedNodes = new Map();
-
-function renderSeed(seed) {
-  let node = seedNodes.get(seed.id);
-  if (!node) {
-    const wrap = document.createElementNS(SVGNS, 'g');
-    wrap.setAttribute('class', 'seed-wrap');
-    wrap.dataset.seedId = seed.id;
-    const halo = document.createElementNS(SVGNS, 'path');
-    halo.setAttribute('class', 'seed-halo');
-    halo.setAttribute('opacity', '0.45');
-    wrap.appendChild(halo);
-    const core = document.createElementNS(SVGNS, 'path');
-    core.setAttribute('class', 'seed-core');
-    wrap.appendChild(core);
-    const ghosts = document.createElementNS(SVGNS, 'g');
-    wrap.appendChild(ghosts);
-    // Layer for chord outlines — sits above core so the outlines are visible on top
-    const chordLayer = document.createElementNS(SVGNS, 'g');
-    chordLayer.setAttribute('pointer-events', 'none');
-    wrap.appendChild(chordLayer);
-    const label = document.createElementNS(SVGNS, 'text');
-    label.setAttribute('class', 'seed-label');
-    wrap.appendChild(label);
-    seedsLayer.appendChild(wrap);
-    node = { wrap, halo, core, ghosts, chordLayer, label };
-    seedNodes.set(seed.id, node);
-  }
-  node.halo.setAttribute('fill', seed.color);
-  node.core.setAttribute('fill', seed.color);
-  const atts = attachmentsForSeed(seed);
-  if (seed.kind === 'modifier') {
-    node.halo.setAttribute('filter', 'url(#halo-blur-small)');
-    if (seed.modifierKind === 'weave') {
-      node.core.setAttribute('class', 'seed-core weave-pulse');
-    } else if (seed.modifierKind === 'cloud') {
-      node.core.setAttribute('class', 'seed-core cloud-pulse');
-    } else if (seed.modifierKind === 'poly') {
-      node.core.setAttribute('class', 'seed-core poly-pulse');
-    } else {
-      node.core.setAttribute('class', 'seed-core');
-    }
-    if (seed.modifierKind === 'ripple' && node.ghosts.children.length === 0) {
-      const drifts = [
-        { gx: 14, gy: 6, delay: 0 },
-        { gx: 16, gy: -4, delay: 500 },
-        { gx: 10, gy: 12, delay: 1000 },
-      ];
-      drifts.forEach(d => {
-        const ghost = document.createElementNS(SVGNS, 'path');
-        ghost.setAttribute('fill', seed.color);
-        ghost.setAttribute('class', 'ripple-ghost');
-        ghost.style.setProperty('--gx', d.gx + 'px');
-        ghost.style.setProperty('--gy', d.gy + 'px');
-        ghost.style.animationDelay = d.delay + 'ms';
-        node.ghosts.appendChild(ghost);
-      });
-    }
-    if (seed.modifierKind === 'ripple') {
-      for (const g of node.ghosts.children) {
-        g.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics));
-      }
-    }
-  } else {
-    node.halo.setAttribute('filter', 'url(#halo-blur)');
-    node.core.setAttribute('class', 'seed-core');
-  }
-  node.halo.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * 1.3, seed.harmonics, atts));
-  node.core.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, atts));
-  node.label.setAttribute('x', seed.cx);
-  node.label.setAttribute('y', seed.cy + seed.r + 22);
-  node.label.textContent = seed.label;
-  if (selectedSeedId === seed.id) node.wrap.classList.add('seed-selected');
-  else node.wrap.classList.remove('seed-selected');
-  node.wrap.classList.toggle('muted', !!seed.muted);
-}
-
-function renderSpheres() {
-  spheresLayer.innerHTML = '';
-  for (const s of seeds) {
-    if (s.kind !== 'modifier' || !s.sphereR) continue;
-    const c = document.createElementNS(SVGNS, 'circle');
-    c.setAttribute('cx', s.cx); c.setAttribute('cy', s.cy);
-    c.setAttribute('r', s.sphereR);
-    c.setAttribute('class', 'sphere');
-    c.setAttribute('fill', `url(#sphere-${s.modifierKind}-grad)`);
-    spheresLayer.appendChild(c);
-  }
-}
-
-function renderTethers() {
-  tethersLayer.innerHTML = '';
-  for (const v of seeds) {
-    if (v.kind !== 'voice' || !v.capturedByIds || v.capturedByIds.size === 0) continue;
-    for (const modId of v.capturedByIds) {
-      const m = seedById(modId);
-      if (!m) continue;
-      const path = document.createElementNS(SVGNS, 'path');
-      const ang = Math.atan2(m.cy - v.cy, m.cx - v.cx);
-      const ax = v.cx + v.r * PEAK_TIP_FACTOR * Math.cos(ang);
-      const ay = v.cy + v.r * PEAK_TIP_FACTOR * Math.sin(ang);
-      const bx = m.cx, by = m.cy;
-      const mx = (ax + bx) / 2, my = (ay + by) / 2;
-      const dx = bx - ax, dy = by - ay;
-      const len = Math.hypot(dx, dy);
-      const perpX = len ? -dy / len : 0, perpY = len ? dx / len : 0;
-      const sag = Math.min(len * 0.10, 24);
-      const ctrlX = mx + perpX * sag, ctrlY = my + perpY * sag;
-      path.setAttribute('d', `M ${ax.toFixed(1)} ${ay.toFixed(1)} Q ${ctrlX.toFixed(1)} ${ctrlY.toFixed(1)}, ${bx.toFixed(1)} ${by.toFixed(1)}`);
-      path.setAttribute('class', 'tether-' + m.modifierKind);
-      path.setAttribute('stroke', m.color);
-      tethersLayer.appendChild(path);
-    }
-  }
-}
-
-function syncRenderedSeeds() {
-  const liveIds = new Set(seeds.map(s => s.id));
-  for (const [id, node] of seedNodes) {
-    if (!liveIds.has(id)) { node.wrap.remove(); seedNodes.delete(id); }
-  }
-  const ordered = [...seeds].sort((a, b) =>
-    (a.kind === 'modifier' ? 0 : 1) - (b.kind === 'modifier' ? 0 : 1));
-  for (const s of ordered) {
-    renderSeed(s);
-    seedsLayer.appendChild(seedNodes.get(s.id).wrap);
-  }
-  renderSpheres();
-  renderTethers();
-}
-
-//
-// =========================================================================
-//  SCHEDULER
-// =========================================================================
-//
-// Weave used to impose its interval on captured voices, which was redundant
-// with per-seed rhythm controls. Weave now applies swing (timing skew) instead:
-// odd-indexed pattern steps are delayed by a swing amount, even-indexed steps
-// catch up. This produces groove that's musically distinctive and impossible
-// to dial in per-seed by hand.
-function effectiveIntervalForVoice(seed) {
-  return seed.intervalMs;
-}
-
-function scheduleAhead() {
-  if (!audioCtx || !isPlaying) return;
-  const now = audioCtx.currentTime;
-  const lookahead = 0.10;
-  for (const seed of seeds) {
-    if (seed.kind !== 'voice') continue;
-    let baseInterval = seed.intervalMs / 1000;
-    let swing = 0.5;
-    // Iterate ALL capturing modifiers. Polyrhythm scales interval, weave sets swing.
-    // Multiple polys multiply factors; last weave wins (overlapping weaves rare).
-    if (seed.capturedByIds && seed.capturedByIds.size > 0) {
-      for (const id of seed.capturedByIds) {
-        const m = seedById(id);
-        if (!m) continue;
-        if (m.modifierKind === 'poly' && m.polyFactor) baseInterval *= m.polyFactor;
-        if (m.modifierKind === 'weave' && m.swing) swing = m.swing;
-      }
-    }
-    if (!seed.nextTrigger || seed.nextTrigger < now - 1) {
-      if (seed.quantize) {
-        const sincePlaybackStart = now - playbackStartTime;
-        const nextSlot = Math.ceil(sincePlaybackStart / baseInterval) * baseInterval;
-        seed.nextTrigger = playbackStartTime + nextSlot;
-      } else {
-        seed.nextTrigger = now + 0.04;
-      }
-    }
-    while (seed.nextTrigger < now + lookahead) {
-      const stepBeforePlay = seed.patternIdx % seed.pattern.length;
-      if (!seed.muted) {
-        playSeedStep(seed, seed.nextTrigger);
-      } else {
-        // Advance pattern index even when muted so position stays sensible on unmute
-        seed.patternIdx = (seed.patternIdx + 1) % Math.max(1, seed.pattern.length);
-      }
-      let intervalToNext;
-      if (Math.abs(swing - 0.5) < 0.01) {
-        intervalToNext = baseInterval;
-      } else if (stepBeforePlay % 2 === 0) {
-        intervalToNext = swing * 2 * baseInterval;
-      } else {
-        intervalToNext = (1 - swing) * 2 * baseInterval;
-      }
-      seed.nextTrigger += intervalToNext;
-    }
-  }
-}
-setInterval(scheduleAhead, 25);
-
-function visualTick() {
-  const now = audioCtx ? audioCtx.currentTime : 0;
-  for (const seed of seeds) {
-    const node = seedNodes.get(seed.id);
-    if (!node) continue;
-    if (seed.kind === 'modifier') continue;
-    let pulseScale = 1;
-    if (seed.lastPulseAt) {
-      const since = now - seed.lastPulseAt;
-      const pulse = Math.max(0, Math.exp(-since * 6) - 0.05);
-      pulseScale = 1 + 0.14 * pulse;
-    }
-    node.core.style.transform = `scale(${pulseScale})`;
-    node.halo.style.transform = `scale(${pulseScale * 1.05})`;
-    node.halo.style.opacity = (0.35 + 0.3 * (pulseScale - 1) / 0.14).toFixed(2);
-    renderChordOutlines(seed, node, now);
-  }
-  updateEvents();
-  renderEvents();
-  requestAnimationFrame(visualTick);
-}
-requestAnimationFrame(visualTick);
-
-// Render one stroked-blob outline per active chord voice.
-// Higher-pitched voices = smaller scale (shorter wavelength metaphor).
-// Each voice fades through attack → sustain (full opacity) → release (fade out).
-function renderChordOutlines(seed, node, audioNow) {
-  if (!node.chordLayer) return;
-  // Drum-synth seeds ignore pitch — chord outlines would be visually misleading
-  const isDrum = seed.synthesisModel === 'kick' || seed.synthesisModel === 'snare' || seed.synthesisModel === 'hihat';
-  if (isDrum) {
-    if (node.chordLayer.childNodes.length > 0) node.chordLayer.innerHTML = '';
-    return;
-  }
-  if (!seed._chordVoices || seed._chordVoices.length === 0) {
-    if (node.chordLayer.childNodes.length > 0) node.chordLayer.innerHTML = '';
-    return;
-  }
-  // Filter out fully-faded voices
-  seed._chordVoices = seed._chordVoices.filter(v => {
-    const elapsed = audioNow - v.startedAt;
-    return elapsed < v.sustainSec + v.releaseSec + 0.05;
-  });
-  // Clear and rebuild outlines this frame. Chord visuals are short-lived enough
-  // that full-redraw is cheaper than diffing.
-  node.chordLayer.innerHTML = '';
-  for (const v of seed._chordVoices) {
-    const elapsed = audioNow - v.startedAt;
-    if (elapsed < 0) continue;  // not yet started (scheduled in future)
-    let opacity;
-    if (elapsed < 0.04) {
-      // Attack ramp 0 → full over 40ms
-      opacity = elapsed / 0.04;
-    } else if (elapsed < v.sustainSec) {
-      opacity = 1;
-    } else {
-      const releasePhase = (elapsed - v.sustainSec) / v.releaseSec;
-      opacity = Math.max(0, 1 - releasePhase);
-    }
-    if (opacity <= 0.01) continue;
-    // Pitch-correlated scale: each semitone above primary shrinks by 4%.
-    // Negative offsets (rare — only if chord has notes below primary) expand.
-    const scale = Math.max(0.35, Math.min(1.4, 1 - v.offset * 0.04));
-    const path = document.createElementNS(SVGNS, 'path');
-    path.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * scale, seed.harmonics));
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', seed.color);
-    path.setAttribute('stroke-width', '1.8');
-    path.setAttribute('stroke-opacity', (opacity * 0.85).toFixed(2));
-    node.chordLayer.appendChild(path);
-  }
-}
-
-// Drive bomb lifecycle: expand → detect pop → echo fade → remove.
-const ECHO_MS = 500;
-function updateEvents() {
-  const tnow = performance.now();
-  for (let i = activeEvents.length - 1; i >= 0; i--) {
-    const ev = activeEvents[i];
-
-    if (ev.type === 'bomb') {
-      if (ev.state === 'expanding') {
-        const elapsed = tnow - ev.startTimeMs;
-        const r = bombCurrentRadius(ev);
-        for (const seed of seeds) {
-          if (seed.kind !== 'voice') continue;
-          if (Math.hypot(seed.cx - ev.cx, seed.cy - ev.cy) <= r) {
-            ev.affectedSeedIds.add(seed.id);
-          }
-        }
-        if (elapsed >= ev.durationMs) {
-          ev.state = 'popped';
-          ev.popTimeMs = tnow;
-          if (ev.filterNode) {
-            try { ev.filterNode.disconnect(); } catch (e) {}
-          }
-          for (const id of ev.affectedSeedIds) {
-            const s = seedById(id);
-            if (s) {
-              s._echoUntil = tnow + ECHO_MS;
-              s._echoColor = ev.color;
-            }
-          }
-        }
-      } else if (ev.state === 'popped') {
-        if (tnow - ev.popTimeMs > ECHO_MS + 50) {
-          activeEvents.splice(i, 1);
-        }
-      }
-    } else if (ev.type === 'sweep') {
-      if (ev.state === 'active') {
-        const elapsed = tnow - ev.startTimeMs;
-        const phase = Math.min(1, elapsed / ev.durationMs);
-        const dx = ev.x1 - ev.x0;
-        const dy = ev.y1 - ev.y0;
-        const lenSq = dx*dx + dy*dy || 1;
-        // The wavefront is at parameter `phase` along AB.
-        // A voice at V is "passed" once its projection onto AB ≤ phase.
-        // Projection t = ((V - A) . direction) / |AB|^2
-        const def = SWEEP_KINDS[ev.kind];
-        for (const seed of seeds) {
-          if (seed.kind !== 'voice') continue;
-          if (ev.affectedSeedIds.has(seed.id)) continue;
-          const t = ((seed.cx - ev.x0) * dx + (seed.cy - ev.y0) * dy) / lenSq;
-          // Voices with t < 0 (behind start) get caught at t=0 (immediately)
-          // Voices with t > 1 (beyond end) never get caught
-          if (t <= phase && t <= 1) {
-            ev.affectedSeedIds.add(seed.id);
-            if (def.action === 'mute') seed.muted = true;
-            else if (def.action === 'unmute') seed.muted = false;
-            seed._echoUntil = tnow + ECHO_MS;
-            seed._echoColor = ev.color;
-            renderSeed(seed);  // update dim state immediately
-          }
-        }
-        if (elapsed >= ev.durationMs) {
-          ev.state = 'done';
-          ev.doneTimeMs = tnow;
-        }
-      } else if (ev.state === 'done') {
-        if (tnow - ev.doneTimeMs > 400) {
-          activeEvents.splice(i, 1);
-        }
-      }
-    }
-  }
-}
-
-const eventsLayer = document.getElementById('events-layer');
-function renderEvents() {
-  eventsLayer.innerHTML = '';
-  const tnow = performance.now();
-  for (const ev of activeEvents) {
-    if (ev.type === 'bomb') {
-      if (ev.state === 'expanding') {
-        const r = bombCurrentRadius(ev);
-        const fill = document.createElementNS(SVGNS, 'circle');
-        fill.setAttribute('cx', ev.cx);
-        fill.setAttribute('cy', ev.cy);
-        fill.setAttribute('r', r);
-        fill.setAttribute('fill', ev.color);
-        fill.setAttribute('fill-opacity', 0.12);
-        eventsLayer.appendChild(fill);
-        const ring = document.createElementNS(SVGNS, 'circle');
-        ring.setAttribute('cx', ev.cx);
-        ring.setAttribute('cy', ev.cy);
-        ring.setAttribute('r', r);
-        ring.setAttribute('fill', 'none');
-        ring.setAttribute('stroke', ev.color);
-        ring.setAttribute('stroke-width', 3);
-        ring.setAttribute('stroke-opacity', 0.85);
-        eventsLayer.appendChild(ring);
-      } else if (ev.state === 'popped') {
-        const since = tnow - ev.popTimeMs;
-        const popPhase = Math.min(1, since / 250);
-        if (popPhase < 1) {
-          const burst = document.createElementNS(SVGNS, 'circle');
-          burst.setAttribute('cx', ev.cx);
-          burst.setAttribute('cy', ev.cy);
-          burst.setAttribute('r', ev.maxRadius * (1 + popPhase * 0.15));
-          burst.setAttribute('fill', 'none');
-          burst.setAttribute('stroke', ev.color);
-          burst.setAttribute('stroke-width', 4 * (1 - popPhase));
-          burst.setAttribute('stroke-opacity', 1 - popPhase);
-          eventsLayer.appendChild(burst);
-        }
-      }
-    } else if (ev.type === 'sweep') {
-      // Compute geometry: wavefront perpendicular to AB direction
-      const dx = ev.x1 - ev.x0;
-      const dy = ev.y1 - ev.y0;
-      const len = Math.hypot(dx, dy) || 1;
-      const dxn = dx / len, dyn = dy / len;
-      const perpX = -dyn, perpY = dxn;
-      let phase;
-      if (ev.state === 'active') {
-        phase = Math.min(1, (tnow - ev.startTimeMs) / ev.durationMs);
-      } else {
-        // 'done' state: keep showing trail briefly, no wavefront
-        phase = 1;
-      }
-      const wfX = ev.x0 + dx * phase;
-      const wfY = ev.y0 + dy * phase;
-      const EXT = 2000;  // line extends well past canvas edges
-      // Filled trail polygon (the swept region behind the wavefront)
-      const a0x = ev.x0 + perpX * EXT, a0y = ev.y0 + perpY * EXT;
-      const a1x = ev.x0 - perpX * EXT, a1y = ev.y0 - perpY * EXT;
-      const w0x = wfX + perpX * EXT,   w0y = wfY + perpY * EXT;
-      const w1x = wfX - perpX * EXT,   w1y = wfY - perpY * EXT;
-      const trail = document.createElementNS(SVGNS, 'polygon');
-      trail.setAttribute('points',
-        `${a0x.toFixed(1)},${a0y.toFixed(1)} ${a1x.toFixed(1)},${a1y.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w0x.toFixed(1)},${w0y.toFixed(1)}`);
-      trail.setAttribute('fill', ev.color);
-      trail.setAttribute('fill-opacity', ev.state === 'active' ? 0.10 : 0.05);
-      eventsLayer.appendChild(trail);
-      if (ev.state === 'active') {
-        // Bright wavefront line
-        const line = document.createElementNS(SVGNS, 'line');
-        line.setAttribute('x1', w0x.toFixed(1));
-        line.setAttribute('y1', w0y.toFixed(1));
-        line.setAttribute('x2', w1x.toFixed(1));
-        line.setAttribute('y2', w1y.toFixed(1));
-        line.setAttribute('stroke', ev.color);
-        line.setAttribute('stroke-width', 3);
-        line.setAttribute('stroke-opacity', 0.85);
-        eventsLayer.appendChild(line);
-      }
-    }
-  }
-
-  // Live preview during sweep drag
-  if (sweepDrag) {
-    const def = SWEEP_KINDS[sweepDrag.kind];
-    const color = def ? def.color : '#ffffff';
-    const line = document.createElementNS(SVGNS, 'line');
-    line.setAttribute('x1', sweepDrag.x0);
-    line.setAttribute('y1', sweepDrag.y0);
-    line.setAttribute('x2', sweepDrag.x1);
-    line.setAttribute('y2', sweepDrag.y1);
-    line.setAttribute('stroke', color);
-    line.setAttribute('stroke-width', 2);
-    line.setAttribute('stroke-dasharray', '6 4');
-    line.setAttribute('stroke-opacity', 0.7);
-    eventsLayer.appendChild(line);
-    // Mark endpoints
-    for (const pt of [[sweepDrag.x0, sweepDrag.y0], [sweepDrag.x1, sweepDrag.y1]]) {
-      const dot = document.createElementNS(SVGNS, 'circle');
-      dot.setAttribute('cx', pt[0]);
-      dot.setAttribute('cy', pt[1]);
-      dot.setAttribute('r', 5);
-      dot.setAttribute('fill', color);
-      dot.setAttribute('fill-opacity', 0.8);
-      eventsLayer.appendChild(dot);
-    }
-  }
-
-  // Echo halos on seeds (shared between bomb and sweep effects)
-  for (const seed of seeds) {
-    if (seed.kind !== 'voice') continue;
-    if (!seed._echoUntil || tnow > seed._echoUntil) continue;
-    const remaining = seed._echoUntil - tnow;
-    const phase = 1 - (remaining / ECHO_MS);
-    const haloR = seed.r * 1.5 + phase * 40;
-    const halo = document.createElementNS(SVGNS, 'circle');
-    halo.setAttribute('cx', seed.cx);
-    halo.setAttribute('cy', seed.cy);
-    halo.setAttribute('r', haloR);
-    halo.setAttribute('fill', 'none');
-    halo.setAttribute('stroke', seed._echoColor || '#ffffff');
-    halo.setAttribute('stroke-width', 3 * (1 - phase));
-    halo.setAttribute('stroke-opacity', (1 - phase) * 0.9);
-    eventsLayer.appendChild(halo);
-  }
-}
 
 //
 // =========================================================================
@@ -1734,22 +840,22 @@ function addTapMarker(x, y) {
 
 function startTap(c) {
   // Bomb modes spawn a one-shot event at the tap point
-  if (BOMB_KINDS[plantMode]) {
-    spawnBomb(c.x, c.y, plantMode);
-    takeSnapshot('fired ' + plantMode);
+  if (BOMB_KINDS[state.plantMode]) {
+    spawnBomb(c.x, c.y, state.plantMode);
+    takeSnapshot('fired ' + state.plantMode);
     return;
   }
   // Sweep modes start a drag: user defines start and end with one gesture
-  if (SWEEP_KINDS[plantMode]) {
+  if (SWEEP_KINDS[state.plantMode]) {
     if (!audioCtx) initAudio();
-    sweepDrag = {
+    state.sweepDrag = {
       x0: c.x, y0: c.y,
       x1: c.x, y1: c.y,
-      kind: plantMode,
+      kind: state.plantMode,
     };
     return;
   }
-  if (plantMode !== 'voice') {
+  if (state.plantMode !== 'voice') {
     plantModifierAt(c);
     return;
   }
@@ -1831,7 +937,7 @@ function finalizeTaps() {
 }
 
 function plantModifierAt(c) {
-  const modKind = plantMode;
+  const modKind = state.plantMode;
   const baseR = modKind === 'weave' ? 30 : (modKind === 'ripple' ? 26 : (modKind === 'poly' ? 28 : 32));
   const seed = makeSeed({
     kind: 'modifier', modifierKind: modKind,
@@ -1871,7 +977,6 @@ canvasEl.addEventListener('pointerdown', (evt) => {
 });
 
 let drag = null;
-let sweepDrag = null;
 function beginDrag(evt, seedId) {
   const seed = seedById(seedId);
   if (!seed) return;
@@ -1933,16 +1038,16 @@ function endDrag() {
 }
 
 function continueSweepDrag(evt) {
-  if (!sweepDrag) return;
+  if (!state.sweepDrag) return;
   const c = canvasCoords(evt);
-  sweepDrag.x1 = c.x;
-  sweepDrag.y1 = c.y;
+  state.sweepDrag.x1 = c.x;
+  state.sweepDrag.y1 = c.y;
 }
 function endSweepDrag() {
-  if (!sweepDrag) return;
-  spawnSweep(sweepDrag.x0, sweepDrag.y0, sweepDrag.x1, sweepDrag.y1, sweepDrag.kind);
-  takeSnapshot('fired ' + sweepDrag.kind);
-  sweepDrag = null;
+  if (!state.sweepDrag) return;
+  spawnSweep(state.sweepDrag.x0, state.sweepDrag.y0, state.sweepDrag.x1, state.sweepDrag.y1, state.sweepDrag.kind);
+  takeSnapshot('fired ' + state.sweepDrag.kind);
+  state.sweepDrag = null;
 }
 
 window.addEventListener('pointermove', continueDrag);
@@ -1953,7 +1058,7 @@ window.addEventListener('pointerup', endSweepDrag);
 function setPlantMode(kind) {
   const opt = document.querySelector(`.plant-opt[data-kind="${kind}"]`);
   if (!opt) return;
-  plantMode = kind;
+  state.plantMode = kind;
   document.querySelectorAll('.plant-opt').forEach(el =>
     el.classList.toggle('active', el === opt));
 }
@@ -2026,7 +1131,7 @@ function buildPicker(el, options, onSelect, getCurrent) {
 function selectSeed(id) {
   const seed = seedById(id);
   if (!seed) return;
-  selectedSeedId = id;
+  state.selectedSeedId = id;
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
   document.getElementById('insp-sub').textContent =
@@ -2327,7 +1432,7 @@ function highlightCurrentStep(seed) {
 let patternDrag = null;
 patternEditorEl.addEventListener('pointerdown', (e) => {
   if (e.target.tagName !== 'circle') return;
-  const seed = seedById(selectedSeedId);
+  const seed = seedById(state.selectedSeedId);
   if (!seed) return;
   const idx = parseInt(e.target.dataset.idx);
   patternDrag = { seed, idx, rect: patternEditorEl.getBoundingClientRect() };
@@ -2359,11 +1464,11 @@ function updatePatternFromMouse(e) {
 
 document.getElementById('insp-close').addEventListener('click', () => {
   inspectorEl.classList.remove('open');
-  selectedSeedId = null;
+  state.selectedSeedId = null;
   syncRenderedSeeds();
 });
 document.getElementById('pitch-slider').addEventListener('input', (e) => {
-  const s = seedById(selectedSeedId);
+  const s = seedById(state.selectedSeedId);
   if (!s) return;
   const midi = parseInt(e.target.value);
   s.fundamental = freqFromMidi(midi);
@@ -2373,7 +1478,7 @@ document.getElementById('pitch-slider').addEventListener('input', (e) => {
 });
 document.getElementById('pitch-slider').addEventListener('change', () => takeSnapshot('tweaked pitch'));
 document.getElementById('quantize-toggle').addEventListener('click', () => {
-  const s = seedById(selectedSeedId);
+  const s = seedById(state.selectedSeedId);
   if (!s) return;
   s.quantize = !s.quantize;
   document.getElementById('quantize-toggle').classList.toggle('on', s.quantize);
@@ -2382,7 +1487,7 @@ document.getElementById('quantize-toggle').addEventListener('click', () => {
 });
 
 document.getElementById('mute-toggle').addEventListener('click', () => {
-  const s = seedById(selectedSeedId);
+  const s = seedById(state.selectedSeedId);
   if (!s) return;
   s.muted = !s.muted;
   document.getElementById('mute-toggle').classList.toggle('on', !!s.muted);
@@ -2391,7 +1496,7 @@ document.getElementById('mute-toggle').addEventListener('click', () => {
 });
 
 document.getElementById('regen-btn').addEventListener('click', () => {
-  const s = seedById(selectedSeedId);
+  const s = seedById(state.selectedSeedId);
   if (!s || s.kind !== 'voice') return;
   const roleKey = s.role || 'melody';
   const role = TIMBRE_ROLES[roleKey];
@@ -2408,11 +1513,11 @@ document.getElementById('regen-btn').addEventListener('click', () => {
   takeSnapshot('rerolled ' + s.label);
 });
 document.getElementById('delete-btn').addEventListener('click', () => {
-  if (!selectedSeedId) return;
-  const s = seedById(selectedSeedId);
+  if (!state.selectedSeedId) return;
+  const s = seedById(state.selectedSeedId);
   if (!s) return;
   const label = s.label;
-  removeSeed(selectedSeedId);
+  removeSeed(state.selectedSeedId);
   syncRenderedSeeds();
   takeSnapshot('removed ' + label);
 });
@@ -2421,7 +1526,7 @@ let barDrag = null;
 harmonicEditorEl.addEventListener('pointerdown', (e) => {
   const bar = e.target.closest('.h-bar');
   if (!bar) return;
-  const seed = seedById(selectedSeedId);
+  const seed = seedById(state.selectedSeedId);
   if (!seed) return;
   const idx = parseInt(bar.dataset.idx);
   barDrag = { bar, idx, seed, rect: harmonicEditorEl.getBoundingClientRect() };
@@ -2448,11 +1553,11 @@ function updateBarFromMouse(e) {
 // =========================================================================
 //
 document.getElementById('guard-toggle').addEventListener('click', () => {
-  guardrails = !guardrails;
-  document.getElementById('guard-pill').classList.toggle('on', guardrails);
+  state.guardrails = !state.guardrails;
+  document.getElementById('guard-pill').classList.toggle('on', state.guardrails);
   // Re-paint piano in-scale highlights
   for (const k of PIANO_KEYS) {
-    if (k.kind === 'white') k.el.classList.toggle('in-scale', guardrails && inScale(k.midi));
+    if (k.kind === 'white') k.el.classList.toggle('in-scale', state.guardrails && inScale(k.midi));
   }
 });
 
@@ -2461,7 +1566,6 @@ document.getElementById('guard-toggle').addEventListener('click', () => {
 //  SNAPSHOTS
 // =========================================================================
 //
-const snapshots = [];
 const MAX_SNAPSHOTS = 16;
 let snapAutoTimer = null;
 function takeSnapshot(label, immediate = false) {
@@ -2492,7 +1596,7 @@ function takeSnapshot(label, immediate = false) {
         polyFactor: s.polyFactor,
         patch: s.patch ? JSON.parse(JSON.stringify(s.patch)) : null,
       })),
-      nextSeedId,
+      nextSeedId: state.nextSeedId,
     };
     snapshots.push(snap);
     if (snapshots.length > MAX_SNAPSHOTS) snapshots.shift();
@@ -2515,7 +1619,7 @@ function clearCanvas() {
   }
   seeds.length = 0;
   activeEvents.length = 0;
-  selectedSeedId = null;
+  state.selectedSeedId = null;
   inspectorEl.classList.remove('open');
   syncRenderedSeeds();
   takeSnapshot('cleared');
@@ -2563,13 +1667,13 @@ function revertToSnapshot(i) {
     seeds.push(newSeed);
     setupModifierChain(newSeed);
   }
-  nextSeedId = snap.nextSeedId;
-  if (!seedById(selectedSeedId)) {
-    selectedSeedId = null;
+  state.nextSeedId = snap.state.nextSeedId;
+  if (!seedById(state.selectedSeedId)) {
+    state.selectedSeedId = null;
     inspectorEl.classList.remove('open');
   }
   syncRenderedSeeds();
-  if (selectedSeedId) selectSeed(selectedSeedId);
+  if (state.selectedSeedId) selectSeed(state.selectedSeedId);
   renderTimeline(i);
 }
 
@@ -2620,25 +1724,25 @@ const playBtn = document.getElementById('play-btn');
 playBtn.addEventListener('click', async () => {
   const ctx = await ensureAudio();
   if (!ctx) return;
-  if (isPlaying) {
-    isPlaying = false;
+  if (state.isPlaying) {
+    state.isPlaying = false;
     try { await ctx.suspend(); } catch (e) {}
     playBtn.textContent = '▶ start';
     playBtn.classList.add('primary');
     showAudioStatus(ctx.state + ' · stopped');
   } else {
-    isPlaying = true;
+    state.isPlaying = true;
     if (ctx.state === 'suspended') {
       const result = await withTimeout(ctx.resume(), 1500, 'resume');
       if (result.timeout || result.error) {
         showAudioStatus('cannot resume · state=' + ctx.state, 'error');
-        isPlaying = false;
+        state.isPlaying = false;
         return;
       }
     }
     playBtn.textContent = '■ stop';
     playBtn.classList.remove('primary');
-    playbackStartTime = ctx.currentTime + 0.04;
+    state.playbackStartTime = ctx.currentTime + 0.04;
     for (const s of seeds) {
       s.nextTrigger = 0; s.patternIdx = 0;
     }
