@@ -17,6 +17,7 @@ import {
   SVGNS, renderSeed, removeSeed, radiusForFundamental, syncRenderedSeeds,
 } from './seeds.js';
 import { setStepHighlightHandler } from './scheduler.js';
+import { refreshSelectionLights, paintScreen } from './output/minilab3.js';
 
 let takeSnapshotFn = (label) => {};
 let reevaluateAllCapturesFn = () => {};
@@ -256,6 +257,8 @@ export function selectSeed(id) {
     capInfo.style.display = 'none';
   }
   inspectorEl.classList.add('open');
+  refreshSelectionLights();
+  paintScreen();
 }
 
 function updatePatternLoopInfo(seed) {

@@ -27,6 +27,7 @@ import { initAudio, audioCtx } from './audio/context.js';
 import { selectSeed } from './inspector.js';
 import { takeSnapshot } from './snapshots.js';
 import { setSetPlantModeFn } from './input.js';
+import { refreshPadLights } from './output/minilab3.js';
 
 export function canvasCoords(evt) {
   const ctm = canvasEl.getScreenCTM();
@@ -316,6 +317,7 @@ export function setPlantMode(kind) {
   state.plantMode = kind;
   document.querySelectorAll('.plant-opt').forEach(el =>
     el.classList.toggle('active', el === opt));
+  refreshPadLights();
 }
 document.getElementById('plant-group').addEventListener('click', (e) => {
   const opt = e.target.closest('.plant-opt');

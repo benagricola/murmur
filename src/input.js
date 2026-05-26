@@ -17,6 +17,10 @@ import { rescheduleRecordingAutoFinish } from './recording.js';
 import {
   transportStop, transportPlay, transportRecord, transportTap,
 } from './transport.js';
+import { handleControlCC } from './controls.js';
+import {
+  connectMinilab, paintScreen, refreshPadLights,
+} from './output/minilab3.js';
 
 // Lazy hook for setPlantMode (lives in pointer.js). pointer.js
 // registers itself on load — avoids importing pointer.js here and
@@ -272,6 +276,10 @@ function refreshMIDIInputs() {
   if (inputCount > 0) {
     led.classList.add('connected');
     label.textContent = firstName.toLowerCase().replace(/^.*:/, '').slice(0, 14);
+    // Send the DAW-connect handshake and paint the device's pads +
+    // screen. If the user's device isn't a MiniLab 3 this is harmless
+    // — non-Arturia devices ignore the manufacturer-prefixed SysEx.
+    connectMinilab(midiOutputs);
   } else {
     led.classList.remove('connected');
     label.textContent = 'no midi';
@@ -302,6 +310,9 @@ function handleMIDIMessage(evt) {
       else if (v < 64) rollLiveTimbre(-1);
       return;
     }
+    // The 8 panel encoders and 4 faders route through controls.js,
+    // which binds them to the selected seed or global parameters.
+    if (handleControlCC(cc, v)) return;
     return;
   }
   // Notes

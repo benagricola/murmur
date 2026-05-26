@@ -12,6 +12,7 @@ import {
 } from './seeds.js';
 import { selectSeed } from './inspector.js';
 import { takeSnapshot } from './snapshots.js';
+import { refreshPadLights, paintScreen } from './output/minilab3.js';
 
 const RECORD_AUTO_FINISH_MS = 1500;  // stop after this much silence
 
@@ -26,6 +27,7 @@ export function startRecording() {
   ov.id = 'rec-overlay';
   ov.innerHTML = '<span class="rec-dot"></span><span>recording · play a phrase</span>';
   document.getElementById('canvas-wrap').appendChild(ov);
+  refreshPadLights(); paintScreen();
 }
 
 export function finishRecording() {
@@ -35,6 +37,7 @@ export function finishRecording() {
   document.getElementById('rec-btn').textContent = '● record';
   const ov = document.getElementById('rec-overlay');
   if (ov) ov.remove();
+  refreshPadLights(); paintScreen();
 
   if (!state.recordingBuffer || state.recordingBuffer.notes.length === 0) return;
   const result = phraseFromRecording(state.recordingBuffer);

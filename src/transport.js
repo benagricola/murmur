@@ -9,6 +9,7 @@ import {
   ensureAudio, audioCtx, supportsPeriodicWave,
   setMasterVol, showAudioStatus, withTimeout,
 } from './audio/context.js';
+import { refreshPadLights, paintScreen } from './output/minilab3.js';
 
 // High-level tempo change — updates tempo state, then rescales every
 // seed's bar-fraction-derived timings (intervalMs, decay, attack, delay)
@@ -71,6 +72,7 @@ playBtn.addEventListener('click', async () => {
     playBtn.textContent = '▶ start';
     playBtn.classList.add('primary');
     showAudioStatus(ctx.state + ' · stopped');
+    refreshPadLights(); paintScreen();
   } else {
     state.isPlaying = true;
     if (ctx.state === 'suspended') {
@@ -89,6 +91,7 @@ playBtn.addEventListener('click', async () => {
     }
     showAudioStatus(ctx.state + ' · playing' + (supportsPeriodicWave ? '' : ' · basic'),
                     ctx.state === 'running' ? 'ok' : '');
+    refreshPadLights(); paintScreen();
   }
 });
 
