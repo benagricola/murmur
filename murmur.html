@@ -340,6 +340,11 @@ body::before {
   border-color: var(--accent-red); font-weight: 500;
   animation: rec-pulse 800ms ease-in-out infinite;
 }
+.btn.danger {
+  background: rgba(255, 107, 107, 0.18); color: #ffb3b3;
+  border-color: rgba(255, 107, 107, 0.55);
+}
+.btn.danger:hover { background: rgba(255, 107, 107, 0.28); }
 @keyframes rec-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.6); }
   50%      { box-shadow: 0 0 0 6px rgba(255, 107, 107, 0); }
@@ -846,6 +851,8 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
       <div class="vol-wrap"><span>vol</span><input type="range" class="std" id="vol" min="0" max="100" value="35"></div>
       <div class="vol-wrap"><span>tempo</span><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span id="tempo-val">120 bpm</span></div>
       <button class="btn" id="snap-btn">📷</button>
+      <button class="btn" id="clear-btn" title="Clear canvas (a snapshot is taken first so you can revert)">clear</button>
+      <button class="btn" id="midi-log-btn" title="Download the captured MIDI event log as JSON">midi log</button>
     </div>
   </header>
 
@@ -1635,12 +1642,18 @@ function playSnareAt(seed, when, freq, gain) {
 // a sustained note; releasing it produces a release tail.
 const activeLiveNotes = new Map();
 
-function liveNoteOn(midi, velocity = 0.7) {
+function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   if (!audioCtx) { initAudio(); return midi; }
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   // Retrigger if already held — release old, start fresh
   if (activeLiveNotes.has(midi)) liveNoteOff(midi);
-  const targetMidi = guardrails ? snapToScale(midi) : midi;
+  // Hardware MIDI keyboards have labelled keys — if the user pressed F#,
+  // they chose F#. Scale-snapping is for abstract inputs (QWERTY rows,
+  // on-screen piano) where guardrails protects new users from off-key
+  // mash. Without this, polyphony collapses when multiple adjacent keys
+  // snap to the same scale degree.
+  const shouldSnap = guardrails && source !== 'midi';
+  const targetMidi = shouldSnap ? snapToScale(midi) : midi;
   const freq = freqFromMidi(targetMidi);
   const osc = audioCtx.createOscillator();
   const env = audioCtx.createGain();
@@ -1671,9 +1684,22 @@ function liveNoteOff(midi) {
   const now = audioCtx.currentTime;
   const releaseTime = 0.15;
   try {
-    note.env.gain.cancelScheduledValues(now);
-    note.env.gain.setValueAtTime(note.env.gain.value, now);
-    note.env.gain.exponentialRampToValueAtTime(0.0008, now + releaseTime);
+    // cancelAndHoldAtTime freezes the value of an in-flight ramp at `now`
+    // and discards events after it — the right primitive for "cut off the
+    // attack mid-rise and release from wherever we got to." Falls back to
+    // the older cancel+set pattern for engines that lack it.
+    const g = note.env.gain;
+    if (typeof g.cancelAndHoldAtTime === 'function') {
+      g.cancelAndHoldAtTime(now);
+    } else {
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+    }
+    // exponentialRampToValueAtTime cannot start from 0; if a note-off
+    // arrives so early that gain is still 0, jump to a tiny audible value
+    // first so the ramp has something to descend from.
+    if (g.value < 0.0001) g.setValueAtTime(0.0001, now);
+    g.exponentialRampToValueAtTime(0.0008, now + releaseTime);
     note.osc.stop(now + releaseTime + 0.05);
   } catch (e) { /* osc may already be stopped */ }
   activeLiveNotes.delete(midi);
@@ -1781,7 +1807,7 @@ function playSeedStep(seed, when) {
 //  All three sources end at noteOn(midi, velocity) → noteOff(midi).
 // =========================================================================
 //
-function noteOn(midi, velocity) {
+function noteOn(midi, velocity, source = 'qwerty') {
   // If recording, push this note into the buffer.
   if (isRecording) {
     if (!recordingBuffer) {
@@ -1797,7 +1823,7 @@ function noteOn(midi, velocity) {
     recordingBuffer.lastActivityMs = performance.now();
     rescheduleRecordingAutoFinish();
   }
-  const playedMidi = liveNoteOn(midi, velocity);
+  const playedMidi = liveNoteOn(midi, velocity, source);
   highlightPianoKey(midi, true);
   highlightPianoKey(playedMidi, true);
   flashMidiLED();
@@ -1846,18 +1872,103 @@ function checkAutoFinishRecording() {
 
 // === Web MIDI ===
 let midiAccess = null;
+
+// === MIDI debug log ===
+// Every incoming MIDI message is recorded so we can dump a trace
+// to disk and diagnose what a particular controller is actually
+// sending. Ring-buffered so a long session doesn't run away.
+const MIDI_LOG_MAX = 8000;
+const midiLog = [];
+let midiVerbose = false;  // toggle via window.murmurMidiVerbose = true in DevTools
+const midiSessionStart = performance.now();
+
+function midiCmdName(status) {
+  const cmd = status & 0xf0;
+  switch (cmd) {
+    case 0x80: return 'noteOff';
+    case 0x90: return 'noteOn';
+    case 0xa0: return 'polyAftertouch';
+    case 0xb0: return 'cc';
+    case 0xc0: return 'programChange';
+    case 0xd0: return 'channelAftertouch';
+    case 0xe0: return 'pitchBend';
+    case 0xf0: return status === 0xf0 ? 'sysex' : 'system';
+    default:   return 'unknown';
+  }
+}
+
+function logMIDI(evt, portName) {
+  const bytes = Array.from(evt.data);
+  const status = bytes[0] || 0;
+  const cmd = status & 0xf0;
+  const channel = (status & 0x0f) + 1;
+  const isSystem = status >= 0xf0;
+  const entry = {
+    t: +(performance.now() - midiSessionStart).toFixed(2),
+    port: portName,
+    bytes,
+    hex: bytes.map(b => b.toString(16).padStart(2, '0')).join(' '),
+    type: midiCmdName(status),
+    channel: isSystem ? null : channel,
+  };
+  if (cmd === 0x90 || cmd === 0x80 || cmd === 0xa0) {
+    entry.note = bytes[1];
+    entry.velocity = bytes[2];
+  } else if (cmd === 0xb0) {
+    entry.cc = bytes[1];
+    entry.value = bytes[2];
+  } else if (cmd === 0xe0) {
+    entry.pitchBend = ((bytes[2] << 7) | bytes[1]) - 8192;
+  } else if (cmd === 0xc0 || cmd === 0xd0) {
+    entry.value = bytes[1];
+  }
+  midiLog.push(entry);
+  if (midiLog.length > MIDI_LOG_MAX) midiLog.shift();
+  if (midiVerbose) console.log('[midi]', entry);
+}
+
+function downloadMIDILog() {
+  const payload = {
+    capturedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    ports: midiAccess ? [...midiAccess.inputs.values()].map(i => ({ name: i.name, manufacturer: i.manufacturer, id: i.id })) : [],
+    events: midiLog,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `murmur-midi-log-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+document.getElementById('midi-log-btn').addEventListener('click', downloadMIDILog);
+// Toggle real-time console logging via DevTools: window.murmurMidiVerbose = true
+Object.defineProperty(window, 'murmurMidiVerbose', {
+  get: () => midiVerbose,
+  set: (v) => { midiVerbose = !!v; console.log('[midi] verbose logging =', midiVerbose); },
+});
+
 function setupMIDI() {
   if (!navigator.requestMIDIAccess) {
     document.getElementById('midi-label').textContent = 'no midi support';
     return;
   }
-  navigator.requestMIDIAccess().then((access) => {
+  navigator.requestMIDIAccess({ sysex: true }).then((access) => {
     midiAccess = access;
     refreshMIDIInputs();
     access.onstatechange = refreshMIDIInputs;
   }).catch((err) => {
-    console.warn('MIDI access denied', err);
-    document.getElementById('midi-label').textContent = 'midi denied';
+    console.warn('MIDI access (with SysEx) denied; retrying without SysEx', err);
+    navigator.requestMIDIAccess().then((access) => {
+      midiAccess = access;
+      refreshMIDIInputs();
+      access.onstatechange = refreshMIDIInputs;
+    }).catch((err2) => {
+      console.warn('MIDI access denied', err2);
+      document.getElementById('midi-label').textContent = 'midi denied';
+    });
   });
 }
 function refreshMIDIInputs() {
@@ -1880,10 +1991,11 @@ function refreshMIDIInputs() {
   }
 }
 function handleMIDIMessage(evt) {
+  logMIDI(evt, evt.target && evt.target.name);
   const [status, note, velocity] = evt.data;
   const cmd = status & 0xf0;
   if (cmd === 0x90 && velocity > 0) {
-    noteOn(note, velocity / 127);
+    noteOn(note, velocity / 127, 'midi');
   } else if (cmd === 0x80 || (cmd === 0x90 && velocity === 0)) {
     noteOff(note);
   }
@@ -3587,9 +3699,9 @@ document.getElementById('guard-toggle').addEventListener('click', () => {
 const snapshots = [];
 const MAX_SNAPSHOTS = 16;
 let snapAutoTimer = null;
-function takeSnapshot(label) {
+function takeSnapshot(label, immediate = false) {
   clearTimeout(snapAutoTimer);
-  snapAutoTimer = setTimeout(() => {
+  const capture = () => {
     const snap = {
       label, ts: new Date(),
       seeds: seeds.map(s => ({
@@ -3619,9 +3731,50 @@ function takeSnapshot(label) {
     snapshots.push(snap);
     if (snapshots.length > MAX_SNAPSHOTS) snapshots.shift();
     renderTimeline();
-  }, 200);
+  };
+  if (immediate) capture();
+  else snapAutoTimer = setTimeout(capture, 200);
 }
 document.getElementById('snap-btn').addEventListener('click', () => takeSnapshot('manual'));
+
+function clearCanvas() {
+  takeSnapshot('before clear', true);
+  // Release any held live notes so their oscillators don't sustain forever.
+  for (const m of [...activeLiveNotes.keys()]) liveNoteOff(m);
+  // Disconnect modifier-chain inputs so dangling delay/reverb graphs go quiet.
+  // (The rest of each chain has no input source and will be GC'd.)
+  for (const s of seeds) {
+    if (s.delayInput)  { try { s.delayInput.disconnect();  } catch (e) {} }
+    if (s.reverbInput) { try { s.reverbInput.disconnect(); } catch (e) {} }
+  }
+  seeds.length = 0;
+  activeEvents.length = 0;
+  selectedSeedId = null;
+  inspectorEl.classList.remove('open');
+  syncRenderedSeeds();
+  takeSnapshot('cleared');
+}
+
+const clearBtn = document.getElementById('clear-btn');
+let clearConfirmTimer = null;
+clearBtn.addEventListener('click', () => {
+  if (clearBtn.dataset.armed === '1') {
+    clearTimeout(clearConfirmTimer);
+    clearBtn.dataset.armed = '0';
+    clearBtn.textContent = 'clear';
+    clearBtn.classList.remove('danger');
+    clearCanvas();
+    return;
+  }
+  clearBtn.dataset.armed = '1';
+  clearBtn.textContent = 'confirm?';
+  clearBtn.classList.add('danger');
+  clearConfirmTimer = setTimeout(() => {
+    clearBtn.dataset.armed = '0';
+    clearBtn.textContent = 'clear';
+    clearBtn.classList.remove('danger');
+  }, 2000);
+});
 
 function revertToSnapshot(i) {
   const snap = snapshots[i];
