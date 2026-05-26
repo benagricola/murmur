@@ -321,9 +321,28 @@ document.getElementById('plant-group').addEventListener('click', (e) => {
   const opt = e.target.closest('.plant-opt');
   if (!opt) return;
   setPlantMode(opt.dataset.kind);
+  // On mobile the palette is a slide-up drawer — auto-close after a
+  // tool is picked so the canvas isn't covered.
+  const palette = document.getElementById('tool-palette');
+  if (palette && palette.classList.contains('open')) palette.classList.remove('open');
 });
 // Hand setPlantMode to input.js so MiniLab 3 bank-B pads can switch modes.
 setSetPlantModeFn(setPlantMode);
+
+// Tool-palette drawer toggle (visible only on narrow viewports — CSS
+// handles the show/hide). Tapping the button slides the palette up;
+// tapping anywhere else on the canvas closes it.
+const toolPalette = document.getElementById('tool-palette');
+const toolPaletteToggle = document.getElementById('tool-palette-toggle');
+if (toolPaletteToggle && toolPalette) {
+  toolPaletteToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toolPalette.classList.toggle('open');
+  });
+  canvasEl.addEventListener('pointerdown', () => {
+    if (toolPalette.classList.contains('open')) toolPalette.classList.remove('open');
+  }, { capture: true });
+}
 
 // === Palette (active timbre role for new voices) ===
 function buildPalette() {

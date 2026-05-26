@@ -17,20 +17,6 @@
     <div class="controls">
       <button class="btn primary" id="play-btn">▶ start</button>
       <button class="btn" id="rec-btn">● record</button>
-      <div class="plant-group" id="plant-group">
-        <div class="plant-opt active" data-kind="voice"><span class="dot"></span>voice</div>
-        <div class="plant-opt" data-kind="weave"><span class="dot"></span>weave</div>
-        <div class="plant-opt" data-kind="ripple"><span class="dot"></span>ripple</div>
-        <div class="plant-opt" data-kind="cloud"><span class="dot"></span>cloud</div>
-        <div class="plant-opt" data-kind="poly"><span class="dot"></span>poly</div>
-        <div class="plant-divider"></div>
-        <div class="plant-opt event-opt" data-kind="drop"><span class="dot"></span>drop</div>
-        <div class="plant-opt event-opt" data-kind="muffle"><span class="dot"></span>muffle</div>
-        <div class="plant-opt event-opt" data-kind="thin"><span class="dot"></span>thin</div>
-        <div class="plant-opt event-opt" data-kind="rise"><span class="dot"></span>rise</div>
-        <div class="plant-opt event-opt" data-kind="fade"><span class="dot"></span>fade</div>
-      </div>
-      <div class="palette" id="palette"></div>
       <div class="midi-status" title="MIDI device status">
         <span class="midi-led" id="midi-led"></span>
         <span id="midi-label">no midi</span>
@@ -46,6 +32,25 @@
       <button class="btn" id="midi-log-btn" title="Download the captured MIDI event log as JSON">midi log</button>
     </div>
   </header>
+
+  <button class="tool-palette-toggle" id="tool-palette-toggle" aria-label="Show tools">tools</button>
+
+  <aside class="tool-palette" id="tool-palette">
+    <div class="plant-group" id="plant-group">
+      <div class="plant-opt active" data-kind="voice"><span class="dot"></span>voice</div>
+      <div class="palette" id="palette"></div>
+      <div class="plant-opt" data-kind="weave"><span class="dot"></span>weave</div>
+      <div class="plant-opt" data-kind="ripple"><span class="dot"></span>ripple</div>
+      <div class="plant-opt" data-kind="cloud"><span class="dot"></span>cloud</div>
+      <div class="plant-opt" data-kind="poly"><span class="dot"></span>poly</div>
+      <div class="plant-divider"></div>
+      <div class="plant-opt event-opt" data-kind="drop"><span class="dot"></span>drop</div>
+      <div class="plant-opt event-opt" data-kind="muffle"><span class="dot"></span>muffle</div>
+      <div class="plant-opt event-opt" data-kind="thin"><span class="dot"></span>thin</div>
+      <div class="plant-opt event-opt" data-kind="rise"><span class="dot"></span>rise</div>
+      <div class="plant-opt event-opt" data-kind="fade"><span class="dot"></span>fade</div>
+    </div>
+  </aside>
 
   <div class="canvas-wrap" id="canvas-wrap">
     <svg class="canvas" id="canvas" viewBox="0 0 1400 800" preserveAspectRatio="xMidYMid meet">

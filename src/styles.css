@@ -36,27 +36,32 @@
 }
 .audio-status.ok { color: rgba(150, 240, 180, 0.70); }
 
-/* ===== PALETTE (top bar) ===== */
+/* ===== PALETTE (timbre roles) — flyout under the "voice" tool ===== */
+/* Hidden by default; revealed only when "voice" is the active plant
+   mode. Sits inside the vertical tool palette between voice and the
+   other tools. */
 .palette {
-  display: inline-flex;
-  align-items: center;
+  display: none;
+  flex-direction: column;
   gap: 2px;
-  padding: 2px 4px;
-  border: 1px solid var(--line-strong);
-  border-radius: 100px;
+  margin: 4px 4px 4px 16px;
+  padding: 4px 0;
+  border-left: 1px solid var(--line-strong);
+  padding-left: 8px;
 }
+.plant-group:has(.plant-opt[data-kind="voice"].active) .palette { display: flex; }
 .palette-label {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 9px;
+  font-size: 8px;
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.10em;
-  padding: 0 6px;
+  padding: 0 2px 2px;
 }
 .palette-item {
-  display: flex; align-items: center; gap: 5px;
-  padding: 4px 8px;
-  border-radius: 100px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px;
+  border-radius: 8px;
   cursor: pointer;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 9px;
@@ -66,11 +71,11 @@
 }
 .palette-item:hover { color: var(--ink); }
 .palette-item.active {
-  background: rgba(255, 209, 102, 0.16);
+  background: rgba(255, 209, 102, 0.12);
   color: var(--accent);
 }
 .palette-item .pal-dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
 
 /* Cloud modifier visuals */
@@ -125,12 +130,9 @@
 
 /* Muted seeds visibly dim — applies whether muted by sweep or by inspector toggle */
 .seed-wrap.muted { opacity: 0.28; }
-.plant-divider {
-  width: 1px;
-  align-self: stretch;
-  background: var(--line-strong);
-  margin: 4px 2px;
-}
+/* Tool-palette divider — see .plant-divider override in the tool-palette
+   section below for the vertical-strip layout. This rule retained as a
+   fallback for any horizontal usage. */
 
 .tether-poly {
   fill: none; stroke-linecap: round;
@@ -196,16 +198,33 @@
   }
   .vol-wrap input[type="range"].std { width: 60px; }
   .guard-toggle { padding: 5px 8px; }
-  /* Plant-group on narrow becomes a wrapping rounded box so the 11 chips don't overflow */
+  /* On narrow viewports the tool palette becomes a slide-up bottom
+     drawer that's hidden until the floating "tools" button is tapped.
+     This avoids stealing canvas width on phones. */
+  .tool-palette-toggle { display: block; }
+  .tool-palette {
+    position: fixed !important;
+    left: 0; right: 0; bottom: 84px;
+    top: auto !important;
+    border-radius: 14px 14px 0 0;
+    padding: 12px;
+    transform: translateY(110%);
+    transition: transform 0.22s ease-out;
+    z-index: 60;
+  }
+  .tool-palette.open { transform: translateY(0); }
   .plant-group {
+    flex-direction: row !important;
     flex-wrap: wrap;
-    border-radius: 12px;
-    justify-content: flex-start;
-    flex: 1 1 100%;       /* take a full row on its own */
+    width: auto !important;
+    gap: 4px;
+    justify-content: center;
   }
   .plant-opt {
-    padding: 4px 8px;
+    padding: 6px 10px;
     font-size: 9px;
+    min-width: 64px;
+    justify-content: center;
   }
   .plant-divider { display: none; }
   .app {
@@ -341,30 +360,64 @@ body::before {
   50%      { box-shadow: 0 0 0 6px rgba(255, 107, 107, 0); }
 }
 
+/* ===== TOOL PALETTE (left edge of canvas) ===== */
+.tool-palette {
+  position: absolute;
+  top: 88px;
+  left: 14px;
+  z-index: 40;
+  background: rgba(20, 14, 32, 0.78);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 8px;
+}
 .plant-group {
-  display: inline-flex;
-  border: 1px solid var(--line-strong);
-  border-radius: 100px;
-  padding: 2px;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+  width: 76px;
 }
 .plant-opt {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.10em;
-  padding: 5px 12px;
-  border-radius: 100px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 8px 10px;
+  border-radius: 10px;
   cursor: pointer;
   color: var(--ink-soft);
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap;
 }
+.plant-opt:hover { background: rgba(236,230,245,0.05); }
 .plant-opt.active {
   background: rgba(255, 209, 102, 0.16);
   color: var(--accent);
 }
-.plant-opt .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.plant-opt .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .plant-opt[data-kind="voice"] .dot { background: #5fd2e8; }
 .plant-opt[data-kind="weave"] .dot { background: #ffa94d; }
 .plant-opt[data-kind="ripple"] .dot { background: #e8a8c8; }
+.plant-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
+}
+/* Tools toggle is only visible on narrow viewports */
+.tool-palette-toggle {
+  display: none;
+  position: absolute;
+  top: 72px; left: 14px;
+  z-index: 41;
+  background: rgba(20, 14, 32, 0.85);
+  border: 1px solid var(--line-strong);
+  border-radius: 100px;
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.10em;
+  padding: 6px 14px;
+  cursor: pointer;
+}
 
 .vol-wrap { display: flex; gap: 8px; align-items: center; }
 input[type="range"].std {
