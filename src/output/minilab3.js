@@ -42,6 +42,12 @@ export function connectMinilab(outputs) {
   }
   if (midiOuts.length === 0) return false;
   console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name));
+  // Universal Device Inquiry — standard MIDI request that any
+  // compliant device should answer. Sent BEFORE the Arturia-specific
+  // handshake so we can capture firmware version even if the device
+  // isn't in DAW mode and ignores the rest. Reply lands on the input
+  // port; parsing happens in input.js.
+  sendUniversalDeviceInquiry();
   // Hello sequence from Ableton's __init__.py: enter DAW mode, then
   // request the device's current program. Reply lands on the input
   // port and is captured by the regular MIDI log.
@@ -51,6 +57,17 @@ export function connectMinilab(outputs) {
   // writes. Push initial state so the user sees something immediately.
   setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
   return true;
+}
+
+// Universal Device Inquiry — standard MIDI System Exclusive request
+// (NOT Arturia-specific). Every compliant device replies with its
+// manufacturer ID, family / model bytes, and firmware version. The
+// reply doesn't use our HEADER wrapper.
+function sendUniversalDeviceInquiry() {
+  const msg = [0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7];
+  for (const out of midiOuts) {
+    try { out.send(msg); } catch (e) {}
+  }
 }
 
 export function disconnectMinilab() {

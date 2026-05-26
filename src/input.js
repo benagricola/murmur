@@ -277,27 +277,85 @@ function refreshMIDIInputs() {
   const label = document.getElementById('midi-label');
   if (inputCount > 0) {
     led.classList.add('connected');
-    // Port names look like `Minilab3:Minilab3 MIDI 20:0` — strip the
-    // device-prefix (everything up to the *first* colon) and the
-    // trailing OS port number `20:0`, leaving the human-readable
-    // chunk in the middle.
+    // Initial label from the port name. Gets upgraded to the actual
+    // device name + firmware once the Universal Device Inquiry reply
+    // arrives — see parseSysExReply / setDeviceLabel.
     let displayName = firstName.includes(':') ? firstName.substring(firstName.indexOf(':') + 1) : firstName;
     displayName = displayName.replace(/\s+\d+:\d+$/, '').toLowerCase();
-    label.textContent = displayName.slice(0, 16);
+    setDeviceLabel(displayName.slice(0, 16));
     // Send the DAW-connect handshake and paint the device's pads +
     // screen. If the user's device isn't a MiniLab 3 this is harmless
     // — non-Arturia devices ignore the manufacturer-prefixed SysEx.
     connectMinilab(midiOutputs);
   } else {
     led.classList.remove('connected');
-    label.textContent = 'no midi';
+    setDeviceLabel('no midi');
   }
+}
+
+// Holds the device label as we learn more about it. Starts as the
+// port name, gets enriched with "MiniLab 3 · fw 1.0.5" once the
+// Universal Device Inquiry reply lands.
+let deviceLabel = '';
+
+function setDeviceLabel(text) {
+  deviceLabel = text;
+  const el = document.getElementById('midi-label');
+  if (el) el.textContent = text;
+}
+
+// Arturia manufacturer ID is `00 20 6B`. The Universal Device Inquiry
+// reply for the MiniLab 3 looks like:
+//   F0 7E 7F 06 02 00 20 6B <fam_lo> <fam_hi> <mod_lo> <mod_hi>
+//                            <v1> <v2> <v3> <v4> F7
+// Family bytes identify the product line, model bytes identify the
+// specific device. The four version bytes are 7-bit-safe ASCII or
+// numeric — we render them as `v1.v2.v3.v4` and let the user read it.
+function parseSysExReply(data) {
+  if (data.length < 2 || data[0] !== 0xF0) return;
+  // Universal Device Inquiry reply: `F0 7E <ch> 06 02 <mfg…> ... F7`
+  if (data[1] === 0x7E && data[3] === 0x06 && data[4] === 0x02) {
+    // Manufacturer ID can be 1 byte or 3 bytes (the 3-byte form starts
+    // with 0x00). Skip past it.
+    let i = 5;
+    let mfg;
+    if (data[i] === 0x00) { mfg = `${hex2(data[i])} ${hex2(data[i+1])} ${hex2(data[i+2])}`; i += 3; }
+    else                  { mfg = hex2(data[i]); i += 1; }
+    const isArturia = mfg === '00 20 6b';
+    // Family + model = 4 bytes total
+    const family = (data[i+1] << 7) | data[i];
+    const model  = (data[i+3] << 7) | data[i+2];
+    i += 4;
+    // Up to the closing 0xF7, the remaining bytes are firmware version.
+    const verBytes = [];
+    while (i < data.length && data[i] !== 0xF7) { verBytes.push(data[i]); i++; }
+    const version = verBytes.length > 0 ? verBytes.join('.') : '?';
+    const product = isArturia ? guessArturiaProduct(family, model) : '';
+    const display = isArturia ? `${product} · fw ${version}` : `dev ${mfg} fw ${version}`;
+    setDeviceLabel(display.slice(0, 24));
+    console.log('[midi] device inquiry reply:', { mfg, family, model, version, display });
+  }
+}
+
+function hex2(b) { return (b & 0xFF).toString(16).padStart(2, '0'); }
+
+// Best-effort name lookup for Arturia family/model pairs. Unknown
+// pairs fall back to a generic label.
+function guessArturiaProduct(family, model) {
+  if (family === 0x04 || family === 0x42) return 'minilab 3';  // observed values vary
+  return 'arturia';
 }
 
 function handleMIDIMessage(evt) {
   logMIDI(evt, evt.target && evt.target.name);
   const data = evt.data;
   const status = data[0];
+  // SysEx replies land here too — branch them off before normal
+  // channel-message decoding (status >= 0xF0 is system messages).
+  if (status === 0xF0) {
+    parseSysExReply(data);
+    return;
+  }
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
   // Pitch bend (14-bit, lsb first)
