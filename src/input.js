@@ -23,7 +23,7 @@ import {
 } from './transport.js';
 import { handleControlCC } from './controls.js';
 import {
-  connectMinilab, paintScreen, refreshPadLights,
+  connectMinilab, paintScreen, refreshPadLights, setMidiAccessRef,
 } from './output/minilab3.js';
 
 // Lazy hook for setPlantMode (lives in pointer.js). pointer.js
@@ -270,19 +270,37 @@ export function setupMIDI() {
   }
   navigator.requestMIDIAccess({ sysex: true }).then((access) => {
     midiAccess = access;
+    setMidiAccessRef(access);
     refreshMIDIInputs();
-    access.onstatechange = refreshMIDIInputs;
+    access.onstatechange = refreshMIDIInputsDebounced;
   }).catch((err) => {
     console.warn('MIDI access (with SysEx) denied; retrying without SysEx', err);
     navigator.requestMIDIAccess().then((access) => {
       midiAccess = access;
+      setMidiAccessRef(access);
       refreshMIDIInputs();
-      access.onstatechange = refreshMIDIInputs;
+      access.onstatechange = refreshMIDIInputsDebounced;
     }).catch((err2) => {
       console.warn('MIDI access denied', err2);
       document.getElementById('midi-label').textContent = 'midi denied';
     });
   });
+}
+
+// MIDI access state-change events fire once per port (input + output)
+// during initial enumeration AND on any subsequent change. For a
+// MiniLab 3 that's ~10 fires in rapid succession on first connect.
+// Without debouncing, we'd re-run the DAW handshake 10 times, which
+// puts the device into a confused state where pad LED writes stop
+// being interpreted. Coalesce all the calls inside a 200ms window
+// into a single refresh.
+let refreshTimer = null;
+function refreshMIDIInputsDebounced() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    refreshMIDIInputs();
+  }, 200);
 }
 
 function refreshMIDIInputs() {

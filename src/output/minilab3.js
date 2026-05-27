@@ -202,16 +202,21 @@ function describePorts() {
   console.groupEnd();
 }
 
-function paintOne(padIdx, hex = '#ff0000') {
+function paintOne(padIdx, hex = '#ff0000', opts = {}) {
   if (padIdx < 0 || padIdx > 15) {
     console.warn('[diag] padIdx must be 0..15 (0-7 = bank A, 8-15 = bank B)');
     return;
   }
-  const id = padIdx < 8 ? (0x34 + padIdx) : (0x44 + (padIdx - 8));
+  // `opts.alt = true` uses the transient pad IDs (0x04..0x1B) instead
+  // of the persistent ones (0x34..0x4B). Some MiniLab 3 firmware
+  // versions accept only one or the other for LED RGB writes.
+  const persistentBase = padIdx < 8 ? (0x34 + padIdx) : (0x44 + (padIdx - 8));
+  const transientBase  = padIdx < 8 ? (0x04 + padIdx) : (0x14 + (padIdx - 8));
+  const id = opts.alt ? transientBase : persistentBase;
   const [r, g, b] = hex7(hex);
   const bytes = [...HEADER, 0x02, 0x02, 0x16, id, r, g, b, ...FOOTER];
   const hexStr = bytes.map(x => x.toString(16).padStart(2, '0')).join(' ');
-  console.log(`[diag] paint pad ${padIdx} (id 0x${id.toString(16)}) → ${hex}  bytes: ${hexStr}`);
+  console.log(`[diag] paint pad ${padIdx} (id 0x${id.toString(16)}${opts.alt ? ' transient' : ''}) → ${hex}  bytes: ${hexStr}`);
   setLed(id, r, g, b);
 }
 
@@ -269,6 +274,42 @@ function startClock() {
   console.log('[diag] clock stream resumed.');
 }
 
+// Override which MiniLab port we send SysEx to. Useful for testing
+// whether the ALV / DAW-virtual port is actually the right one for
+// LED writes on this device's firmware. Pass 'alv' (default), 'main'
+// (the MIDI 1 port that normally carries notes/CCs), or 'all' (spray
+// every MiniLab port — what we used to do before commit 0e961be).
+function sysexPort(target = 'alv') {
+  if (!midiAccess) {
+    console.warn('[diag] no MIDI access');
+    return;
+  }
+  const allMinilab = [];
+  for (const out of midiAccess.outputs.values()) {
+    if (/minilab/i.test(out.name || '')) allMinilab.push(out);
+  }
+  if (allMinilab.length === 0) {
+    console.warn('[diag] no MiniLab outputs found');
+    return;
+  }
+  if (target === 'alv') {
+    const alv = allMinilab.find(o => /\b(alv|midiin2|daw)\b/i.test(o.name || ''));
+    midiOuts = alv ? [alv] : allMinilab;
+  } else if (target === 'main') {
+    const main = allMinilab.find(o => !/\b(alv|mcu|hui|din[ _-]?thru|thru|midiin2|daw)\b/i.test(o.name || ''));
+    midiOuts = main ? [main] : allMinilab;
+  } else if (target === 'all') {
+    midiOuts = allMinilab;
+  }
+  console.log('[diag] SysEx port set to:', midiOuts.map(o => o.name));
+}
+// Need midiAccess accessible here — re-export it from input.js via a
+// small hook so this diagnostic can enumerate ports without holding a
+// stale reference. midiAccess is set on every MIDI access success in
+// input.js setupMIDI; lazily fetched by sysexPort each call.
+let midiAccess = null;
+export function setMidiAccessRef(access) { midiAccess = access; }
+
 if (typeof window !== 'undefined') {
   window.murmurDescribePorts = describePorts;
   window.murmurPaintOne = paintOne;
@@ -277,6 +318,7 @@ if (typeof window !== 'undefined') {
   window.murmurSysexLog = setSysexLogging;
   window.murmurStopClock = killClock;
   window.murmurStartClock = startClock;
+  window.murmurSysexPort = sysexPort;
 }
 
 // Mode-switch diagnostics — DevTools-callable. From the SysEx
