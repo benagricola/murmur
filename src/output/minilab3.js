@@ -435,6 +435,16 @@ if (typeof window !== 'undefined') {
   window.murmurStopScan = stopScan;
   window.murmurRealtimePort = realtimePort;
   window.murmurSendLed = sendLed;
+  // Toggle the single-pad-only diagnostic mode. When on, every
+  // repaint call returns early, and pad-taps trigger ONE LED write
+  // for the tapped pad. Easier to see whether a single isolated LED
+  // command works vs the 16+ writes a normal refresh produces.
+  window.murmurDiagSinglePad = (on) => {
+    diagSinglePadOnly = !!on;
+    console.log('[diag] single-pad mode =', diagSinglePadOnly,
+      on ? '— pad taps now paint only the tapped pad; no full refresh'
+         : '— normal pad-light behaviour restored');
+  };
 }
 
 // Mode-switch diagnostics — DevTools-callable. From the SysEx
@@ -511,7 +521,7 @@ const PLANT_MODE_COLORS = {
 // LED colour mapping and pad-press routing can't drift apart.
 
 export function paintAllPads() {
-  if (midiOuts.length === 0) return;
+  if (midiOuts.length === 0 || diagSinglePadOnly) return;
   paintBankA();
   paintBankB();
   paintTransport();
@@ -556,11 +566,30 @@ function paintTransport() {
 // transport indicator LEDs. Bank A pads 1-4 don't change on plant-
 // mode or transport changes, only on selection — see
 // refreshSelectionLights for that case.
+//
+// Diagnostic single-pad mode (`murmurDiagSinglePad(true)`) suppresses
+// full repaints so we can test whether individual pad writes work
+// without 16+ writes in succession.
+export let diagSinglePadOnly = false;
 export function refreshPadLights() {
-  if (midiOuts.length === 0) return;
+  if (midiOuts.length === 0 || diagSinglePadOnly) return;
   paintBankA();
   paintBankB();
   paintTransport();
+}
+
+// Paint exactly one pad — the byte stream you see in the live MIDI
+// log is one LED-paint message and nothing else. Used by the
+// pad-tap diagnostic path so the user can physically tap a pad
+// and see whether that single write produces a colour change.
+export function paintTappedPad(padIdx, hex = '#ffffff') {
+  if (midiOuts.length === 0) return;
+  let id;
+  if (padIdx >= 0 && padIdx < 8) id = PAD_LED_ID_BANK_A[padIdx];
+  else if (padIdx >= 8 && padIdx < 16) id = PAD_LED_ID_BANK_B[padIdx - 8];
+  else return;
+  const [r, g, b] = hex7(hex);
+  setLed(id, r, g, b);
 }
 
 // Selected seed changed — repaint bank A's role-colour drum pads too.

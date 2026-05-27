@@ -143,18 +143,25 @@ function abbreviatePort(name) {
 
 function render() {
   if (!listEl) return;
+  // Preserve scroll state across the diff-render. Only auto-scroll to
+  // the newest entry if the user was already pinned to the bottom — if
+  // they've scrolled up to read history, leave their position alone.
+  const wasPinned = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 30;
   // Find the slice of entries that pass the current filters. We trim
-  // to last 120 visible (panel is short).
+  // to last 200 visible.
   const visibleEntries = [];
-  for (let i = entries.length - 1; i >= 0 && visibleEntries.length < 120; i--) {
+  for (let i = entries.length - 1; i >= 0 && visibleEntries.length < 200; i--) {
     if (shouldShow(entries[i])) visibleEntries.unshift(entries[i]);
   }
-  // Diff-render by clearing + rebuilding. With only 120 rows this is
-  // fast enough at 30Hz and avoids stateful node updates.
+  // Diff-render by clearing + rebuilding.
   const frag = document.createDocumentFragment();
-  for (const e of visibleEntries) {
+  visibleEntries.forEach((e, idx) => {
     const row = document.createElement('div');
     row.className = `mlog-row mlog-${e.direction.toLowerCase()} mlog-cat-${e.cat}`;
+    // Mark the very last (most recent) row so the user can see at a
+    // glance which row appeared most recently — easier to diagnose
+    // order-of-events questions.
+    if (idx === visibleEntries.length - 1) row.classList.add('mlog-latest');
     const tEl = document.createElement('span');
     tEl.className = 'mlog-t';
     tEl.textContent = `+${(e.t / 1000).toFixed(2)}`;
@@ -183,11 +190,10 @@ function render() {
     }
     row.appendChild(hexEl);
     frag.appendChild(row);
-  }
+  });
   listEl.innerHTML = '';
   listEl.appendChild(frag);
-  // Auto-scroll to bottom (newest).
-  listEl.scrollTop = listEl.scrollHeight;
+  if (wasPinned) listEl.scrollTop = listEl.scrollHeight;
 }
 
 // === DOM scaffolding ===

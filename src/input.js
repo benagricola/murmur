@@ -24,6 +24,7 @@ import {
 import { handleControlCC } from './controls.js';
 import {
   connectMinilab, paintScreen, refreshPadLights, setMidiAccessRef,
+  paintTappedPad, diagSinglePadOnly,
 } from './output/minilab3.js';
 import { logIn } from './midi-log-panel.js';
 
@@ -472,20 +473,39 @@ function handleMIDIMessage(evt) {
   // Notes
   if (cmd === 0x90 && data[2] > 0) {
     const note = data[1], velocity = data[2];
-    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise).
-    // Note range: PAD_NOTE_BANK_A_BASE + 4 .. + 7 inclusive.
     const bankA5_8Lo = PAD_NOTE_BANK_A_BASE + 4;
     const bankA5_8Hi = PAD_NOTE_BANK_A_BASE + 7;
-    if (channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankA5_8Hi) {
+    const bankBLo = PAD_NOTE_BANK_B_BASE;
+    const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
+    const isBankA5_8 = channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankA5_8Hi;
+    const isBankB    = channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi;
+    // Diagnostic single-pad mode: bypass the plant-mode change and
+    // the refresh-all-pads side effect. Send exactly one LED-paint
+    // command for the tapped pad with a bright test colour, so the
+    // user can see whether a single isolated write works.
+    if (diagSinglePadOnly && (isBankA5_8 || isBankB)) {
+      // pad index 0..15: bank A = 0..7 (note - PAD_NOTE_BANK_A_BASE),
+      // bank B = 8..15 (note - PAD_NOTE_BANK_B_BASE + 8).
+      const padIdx = isBankB
+        ? (note - PAD_NOTE_BANK_B_BASE + 8)
+        : (note - PAD_NOTE_BANK_A_BASE);
+      // Rotating colour so successive taps are visually distinct.
+      const colours = ['#ff0040', '#40ff00', '#0040ff', '#ffff00', '#ff00ff', '#00ffff'];
+      const colour = colours[padIdx % colours.length];
+      console.log(`[diag] pad tap idx=${padIdx} note=${note} → paint ${colour}`);
+      paintTappedPad(padIdx, colour);
+      flashMidiLED();
+      return;
+    }
+    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise).
+    if (isBankA5_8) {
       const kind = PAD_BANK_A_PLANT_5_8[note - bankA5_8Lo];
       if (kind && setPlantModeFn) setPlantModeFn(kind);
       flashMidiLED();
       return;
     }
     // Bank B selects plant mode.
-    const bankBLo = PAD_NOTE_BANK_B_BASE;
-    const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
-    if (channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi) {
+    if (isBankB) {
       const kind = PAD_BANK_B_TO_PLANT[note - bankBLo];
       if (kind && setPlantModeFn) setPlantModeFn(kind);
       flashMidiLED();
