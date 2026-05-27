@@ -303,17 +303,28 @@ export function setActiveRole(role) {
 const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice'];
 let liveTimbreIdx = 1;  // melody
 
-// Cache one patch per role so twisting the encoder swaps between
-// previously-heard sounds rather than rolling a fresh random patch
-// every detent (which made the device feel chaotic — every twist
-// produced a different sound). Click the encoder to re-roll the
-// current role's patch with a new random variant.
-const liveTimbreCache = {};
+// Per-role timbre history. Every fresh generation pushes onto the
+// front of that role's history ring (10 deep) so the user can step
+// back through previous rolls via the encoder long-press. The
+// liveTimbreCache always points at the most-recent entry (history[0]).
+const HISTORY_DEPTH = 10;
+const liveTimbreHistory = {};   // role → patch[] (newest at index 0)
+const liveTimbreCache = {};     // role → current patch (= history[0])
+
+function pushHistory(role, gen) {
+  if (!liveTimbreHistory[role]) liveTimbreHistory[role] = [];
+  liveTimbreHistory[role].unshift(gen);
+  if (liveTimbreHistory[role].length > HISTORY_DEPTH) {
+    liveTimbreHistory[role].length = HISTORY_DEPTH;
+  }
+  liveTimbreCache[role] = gen;
+}
+
 function ensureRolePatch(role) {
   if (!liveTimbreCache[role]) {
     const gen = TIMBRE_ROLES[role].generate();
     gen.role = role;
-    liveTimbreCache[role] = gen;
+    pushHistory(role, gen);
   }
   return liveTimbreCache[role];
 }
@@ -337,13 +348,36 @@ export function rollLiveTimbre(direction = 1) {
 }
 
 // Click the encoder (or any "commit" gesture): re-roll the current
-// role's patch with a fresh random variant. Updates the cache so
-// the new sound is what you hear next time you scroll back here.
+// role's patch with a fresh random variant. Pushes onto the per-role
+// history so a long-press can step back to the prior sound.
 export function regenerateLiveTimbre() {
   const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
   const gen = TIMBRE_ROLES[role].generate();
   gen.role = role;
-  liveTimbreCache[role] = gen;
+  pushHistory(role, gen);
   liveTimbre = gen;
   paintActiveRole(role);
+}
+
+// Long-press the encoder: revert the current role to its previous
+// timbre. Removes the newest entry from this role's history ring and
+// surfaces the next one. No-op if there's only one entry (or none) —
+// can't undo what was never generated.
+export function revertLiveTimbre() {
+  const role = LIVE_TIMBRE_CYCLE[liveTimbreIdx];
+  const hist = liveTimbreHistory[role];
+  if (!hist || hist.length < 2) return false;
+  hist.shift();           // drop the current head
+  const prev = hist[0];
+  liveTimbreCache[role] = prev;
+  liveTimbre = prev;
+  paintActiveRole(role);
+  return true;
+}
+
+// Diagnostic: peek at the current role's history. Useful for debugging
+// the long-press revert path and for showing the user how many
+// undo steps they have left.
+export function liveTimbreHistoryFor(role) {
+  return (liveTimbreHistory[role] || []).slice();
 }

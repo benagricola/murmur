@@ -12,7 +12,8 @@ import {
 } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
 import {
-  liveTimbre, rollLiveTimbre, regenerateLiveTimbre, LIVE_ROLE_OCTAVE_SHIFT,
+  liveTimbre, rollLiveTimbre, regenerateLiveTimbre, revertLiveTimbre,
+  LIVE_ROLE_OCTAVE_SHIFT,
 } from './timbres.js';
 import { state, activeLiveNotes, releasingNotes, sustainedMidis } from './state.js';
 import { rescheduleRecordingAutoFinish } from './recording.js';
@@ -167,6 +168,13 @@ const PAD_BANK_B_TO_PLANT = [
 const MIDI_LOG_MAX = 8000;
 const midiLog = [];
 let midiVerbose = false;
+
+// Encoder long-press detection — captures the timestamp of the most
+// recent CC 118 press so the matching release can decide whether to
+// treat the gesture as a short press (re-roll) or long press (revert
+// from history). 500ms threshold matches the device's own long-press
+// feel on the OLED-mode button.
+let encoderPressedMs = 0;
 const midiSessionStart = performance.now();
 
 function midiCmdName(status) {
@@ -419,12 +427,24 @@ function handleMIDIMessage(evt) {
       else if (v < 64) rollLiveTimbre(-1);
       return;
     }
-    // Display encoder CLICK (CC 118, push = 127). Regenerates the
-    // CURRENT role's patch with a fresh random variant. Twist to
-    // browse, click to re-roll — keeps the encoder turn sonically
-    // stable while still giving instant access to new variants.
-    if (cc === 118 && v >= 64) {
-      regenerateLiveTimbre();
+    // Display encoder CLICK (CC 118). Press = 127, release = 0.
+    // Short press (< 500ms) re-rolls the current role's patch with a
+    // fresh variant (and pushes it onto a per-role history ring).
+    // Long press (>= 500ms) reverts to the previous entry in that
+    // history — undo for unwanted re-rolls.
+    if (cc === 118) {
+      if (v >= 64) {
+        encoderPressedMs = performance.now();
+      } else {
+        const held = encoderPressedMs ? performance.now() - encoderPressedMs : 0;
+        encoderPressedMs = 0;
+        if (held >= 500) {
+          const reverted = revertLiveTimbre();
+          if (!reverted) console.log('[encoder] nothing to revert in this role');
+        } else {
+          regenerateLiveTimbre();
+        }
+      }
       return;
     }
     // The 8 panel encoders and 4 faders route through controls.js,

@@ -76,13 +76,36 @@ export function connectMinilab(outputs) {
   // port and is captured by the regular MIDI log.
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
   sendRaw([0x01, 0x00, 0x40, 0x01]);
+  // === LED persistence: override to Arturia mode after handshake ===
+  // In pure DAW mode the device runs an Ableton-style frame paint
+  // model — it repaints pad LEDs every frame from an internal cache,
+  // so our sporadic RGB writes get clobbered back to default white
+  // within milliseconds. Switching to Arturia mode (program byte 0x02)
+  // disables that frame loop, so our `02 02 16` LED writes persist
+  // until power cycle.
+  //
+  // Trade-off: in Arturia mode the OLED's auto-driven track/scene
+  // skin stops updating on its own, but we never relied on it (we
+  // drive the screen ourselves via writeScreen), and the shift +
+  // transport pads keep sending notes for input.js to handle.
+  //
+  // localStorage 'murmur.dawSkin' = '1' opts back into pure DAW mode
+  // (useful for diagnosing whether something else is broken).
+  const dawSkinOnly = (typeof localStorage !== 'undefined') &&
+    localStorage.getItem('murmur.dawSkin') === '1';
+  if (!dawSkinOnly) {
+    sendRaw([0x02, 0x00, 0x40, 0x62, 0x02]);  // force Arturia LED model
+  }
   // After handshake the device is ready to accept LED and screen
   // writes. The first paint sometimes lands before the device has
   // finished processing the handshake — pads then stay white until
-  // the next state change forces a repaint. Hedge with two paints
-  // at staggered delays so at least one is guaranteed to take.
+  // the next state change forces a repaint. Hedge with multiple
+  // paints at staggered delays so at least one is guaranteed to take
+  // (the third at 3s catches devices that finish booting their skin
+  // after our earlier writes have already landed).
   setTimeout(() => { paintAllPads(); paintScreen(); }, 250);
   setTimeout(() => { paintAllPads(); paintScreen(); }, 1000);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 3000);
   // One-time hint about setting the device-side arp Sync to Auto/Ext.
   // Suppressed on repeat connects via localStorage.
   setTimeout(showArpSyncHint, 1500);
