@@ -143,76 +143,228 @@ VOICES.noise = function(audioCtx, freq, when, params) {
   };
 };
 
-// Drum voices have internal envelopes baked in — the player treats them
-// as one-shot and skips the shared attack/release ramp.
+// === Drum voices ===
+// One-shot voices whose internal envelopes are baked in — the patch
+// player skips its shared attack/release ramp for these (see
+// `patch.category === 'drum'`).
+//
+// Design notes: the original versions were single-layer (one osc OR
+// one noise burst). Real drum sounds are layered transient + body +
+// tail with light saturation, which is what gives them the "thump"
+// that moves a room. These rebuilds keep the same call signature so
+// the rest of the engine doesn't change.
 
+// Shared soft-clip curve for drum bus saturation. tanh-like shape
+// gives gentle harmonic distortion at peak without clamping the
+// transient hard. Generated once at module load and reused.
+const SOFT_CLIP_CURVE = (() => {
+  const N = 1024;
+  const arr = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;   // -1..1
+    arr[i] = Math.tanh(x * 1.6);        // mild saturation
+  }
+  return arr;
+})();
+
+function softClip(audioCtx) {
+  const ws = audioCtx.createWaveShaper();
+  ws.curve = SOFT_CLIP_CURVE;
+  ws.oversample = '2x';
+  return ws;
+}
+
+// === KICK ===
+// Three stacked layers:
+//   1. Body — pitched sine sweep (e.g. 85→40 Hz over 70ms exponential).
+//      This is what carries the THUMP.
+//   2. Click — short highpassed noise burst at the very start (4ms
+//      decay). Defines the transient so the kick reads on small
+//      speakers.
+//   3. Sub — fixed-pitch sine at ~38 Hz that rises quickly and decays
+//      slower than the body, giving the speakers a chance to actually
+//      reproduce the low-end weight.
+// Routed through a soft-clip waveshaper for harmonic warmth.
 VOICES.kick = function(audioCtx, freq, when, params) {
-  const osc = audioCtx.createOscillator();
   const out = audioCtx.createGain();
-  osc.type = 'sine';
-  const startFreq = Math.max(40, freq * 1.5);
-  const endFreq = Math.max(35, freq * 0.5);
-  osc.frequency.setValueAtTime(startFreq, when);
-  osc.frequency.exponentialRampToValueAtTime(endFreq, when + 0.060);
-  osc.connect(out);
-  out.gain.setValueAtTime(0, when);
-  out.gain.linearRampToValueAtTime(1.4, when + 0.002);
-  out.gain.exponentialRampToValueAtTime(0.0008, when + 0.20);
-  osc.start(when);
-  return {
-    output: out,
-    stop: (whenStop) => { try { osc.stop(Math.max(whenStop, when + 0.25)); } catch (e) {} },
-    detune: null,
-  };
-};
+  const clip = softClip(audioCtx);
+  const preClip = audioCtx.createGain();
+  preClip.gain.value = 1.0;
+  preClip.connect(clip);
+  clip.connect(out);
 
-VOICES.snare = function(audioCtx, freq, when, params) {
-  const out = audioCtx.createGain();
-  const osc = audioCtx.createOscillator();
-  const oscEnv = audioCtx.createGain();
-  osc.type = 'triangle';
-  osc.frequency.value = Math.max(140, freq * 0.8);
-  osc.connect(oscEnv); oscEnv.connect(out);
-  oscEnv.gain.setValueAtTime(0, when);
-  oscEnv.gain.linearRampToValueAtTime(0.4, when + 0.001);
-  oscEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.08);
+  // Body — pitched sine sweep
+  const bodyOsc = audioCtx.createOscillator();
+  const bodyEnv = audioCtx.createGain();
+  bodyOsc.type = 'sine';
+  const bodyStart = Math.max(55, freq * 1.5);
+  const bodyEnd = Math.max(32, freq * 0.55);
+  bodyOsc.frequency.setValueAtTime(bodyStart, when);
+  bodyOsc.frequency.exponentialRampToValueAtTime(bodyEnd, when + 0.07);
+  bodyOsc.connect(bodyEnv); bodyEnv.connect(preClip);
+  bodyEnv.gain.setValueAtTime(0, when);
+  bodyEnv.gain.linearRampToValueAtTime(1.9, when + 0.003);     // hard transient hit
+  bodyEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.30);
+  bodyOsc.start(when);
 
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = createNoiseBuffer(0.15);
-  const nf = audioCtx.createBiquadFilter();
-  nf.type = 'bandpass'; nf.frequency.value = 2200; nf.Q.value = 0.7;
-  const noiseEnv = audioCtx.createGain();
-  noise.connect(nf); nf.connect(noiseEnv); noiseEnv.connect(out);
-  noiseEnv.gain.setValueAtTime(0, when);
-  noiseEnv.gain.linearRampToValueAtTime(0.65, when + 0.001);
-  noiseEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.12);
+  // Click — short HPF'd noise pop
+  const click = audioCtx.createBufferSource();
+  click.buffer = createNoiseBuffer(0.05);
+  const clickHpf = audioCtx.createBiquadFilter();
+  clickHpf.type = 'highpass'; clickHpf.frequency.value = 1500; clickHpf.Q.value = 0.7;
+  const clickEnv = audioCtx.createGain();
+  click.connect(clickHpf); clickHpf.connect(clickEnv); clickEnv.connect(preClip);
+  clickEnv.gain.setValueAtTime(0, when);
+  clickEnv.gain.linearRampToValueAtTime(0.55, when + 0.001);
+  clickEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.012);
+  click.start(when);
 
-  osc.start(when); noise.start(when);
+  // Sub — slower fixed-pitch low sine. This is what your subwoofer feels.
+  const subOsc = audioCtx.createOscillator();
+  const subEnv = audioCtx.createGain();
+  subOsc.type = 'sine';
+  subOsc.frequency.value = Math.max(28, freq * 0.55);
+  subOsc.connect(subEnv); subEnv.connect(preClip);
+  subEnv.gain.setValueAtTime(0, when);
+  subEnv.gain.linearRampToValueAtTime(0.85, when + 0.008);
+  subEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.40);
+  subOsc.start(when);
+
   return {
     output: out,
     stop: (whenStop) => {
-      try { osc.stop(Math.max(whenStop, when + 0.15)); } catch (e) {}
-      try { noise.stop(Math.max(whenStop, when + 0.15)); } catch (e) {}
+      const t = Math.max(whenStop, when + 0.45);
+      try { bodyOsc.stop(t); } catch (e) {}
+      try { subOsc.stop(t); } catch (e) {}
+      try { click.stop(t); } catch (e) {}
     },
     detune: null,
   };
 };
 
-VOICES.hihat = function(audioCtx, freq, when, params) {
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = createNoiseBuffer(0.1);
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'highpass';
-  filter.frequency.value = 7000;
+// === SNARE ===
+// Three layers:
+//   1. Tonal ping — brief triangle around 200 Hz, ~30ms (the "thwap")
+//   2. Body — bandpassed noise centred ~400-600 Hz (the wood/shell)
+//   3. Crack — highpassed noise above 4kHz (the snare wires)
+// Light saturation through soft clip for cohesion.
+VOICES.snare = function(audioCtx, freq, when, params) {
   const out = audioCtx.createGain();
-  noise.connect(filter); filter.connect(out);
-  out.gain.setValueAtTime(0, when);
-  out.gain.linearRampToValueAtTime(0.55, when + 0.001);
-  out.gain.exponentialRampToValueAtTime(0.0008, when + 0.045);
-  noise.start(when);
+  const clip = softClip(audioCtx);
+  const preClip = audioCtx.createGain();
+  preClip.connect(clip); clip.connect(out);
+
+  // Tonal ping
+  const ping = audioCtx.createOscillator();
+  const pingEnv = audioCtx.createGain();
+  ping.type = 'triangle';
+  const pingFreq = Math.max(160, freq * 0.9);
+  ping.frequency.setValueAtTime(pingFreq * 1.6, when);
+  ping.frequency.exponentialRampToValueAtTime(pingFreq, when + 0.012);
+  ping.connect(pingEnv); pingEnv.connect(preClip);
+  pingEnv.gain.setValueAtTime(0, when);
+  pingEnv.gain.linearRampToValueAtTime(0.65, when + 0.001);
+  pingEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.045);
+  ping.start(when);
+
+  // Body — mid noise
+  const body = audioCtx.createBufferSource();
+  body.buffer = createNoiseBuffer(0.20);
+  const bodyBpf = audioCtx.createBiquadFilter();
+  bodyBpf.type = 'bandpass';
+  bodyBpf.frequency.value = 480;
+  bodyBpf.Q.value = 0.9;
+  const bodyEnv = audioCtx.createGain();
+  body.connect(bodyBpf); bodyBpf.connect(bodyEnv); bodyEnv.connect(preClip);
+  bodyEnv.gain.setValueAtTime(0, when);
+  bodyEnv.gain.linearRampToValueAtTime(0.55, when + 0.002);
+  bodyEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.080);
+  body.start(when);
+
+  // Crack — high noise
+  const crack = audioCtx.createBufferSource();
+  crack.buffer = createNoiseBuffer(0.20);
+  const crackHpf = audioCtx.createBiquadFilter();
+  crackHpf.type = 'highpass';
+  crackHpf.frequency.value = 3800;
+  crackHpf.Q.value = 0.7;
+  const crackEnv = audioCtx.createGain();
+  crack.connect(crackHpf); crackHpf.connect(crackEnv); crackEnv.connect(preClip);
+  crackEnv.gain.setValueAtTime(0, when);
+  crackEnv.gain.linearRampToValueAtTime(0.85, when + 0.001);
+  crackEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.140);
+  crack.start(when);
+
   return {
     output: out,
-    stop: (whenStop) => { try { noise.stop(Math.max(whenStop, when + 0.1)); } catch (e) {} },
+    stop: (whenStop) => {
+      const t = Math.max(whenStop, when + 0.20);
+      try { ping.stop(t); } catch (e) {}
+      try { body.stop(t); } catch (e) {}
+      try { crack.stop(t); } catch (e) {}
+    },
+    detune: null,
+  };
+};
+
+// === HIHAT ===
+// 808-style metallic shimmer built from 6 square-wave oscillators at
+// non-harmonic frequencies (the classic 808 hat ratios), mixed and
+// passed through two filters and a sharp envelope. Plus a noise layer
+// for the airy "tss" component.
+//
+// params.open: true → longer decay (open hat ~250ms), false → snappy
+// closed hat ~50ms. Generators in timbres.js can roll either.
+const HAT_RATIOS = [2.0, 3.0, 4.16, 5.43, 6.79, 8.21];   // 808-style
+VOICES.hihat = function(audioCtx, freq, when, params) {
+  const open = params.open === true;
+  const decayMs = open ? 250 : 50;
+  const out = audioCtx.createGain();
+
+  // Metallic component — sum of 6 squares at non-harmonic ratios.
+  const base = 320;
+  const summer = audioCtx.createGain();
+  summer.gain.value = 1 / HAT_RATIOS.length;
+  const oscs = [];
+  for (const r of HAT_RATIOS) {
+    const o = audioCtx.createOscillator();
+    o.type = 'square';
+    o.frequency.value = base * r;
+    o.connect(summer);
+    o.start(when);
+    oscs.push(o);
+  }
+  // Two filters in series: bandpass to isolate the ringy mid-highs,
+  // then highpass to thin it out.
+  const bpf = audioCtx.createBiquadFilter();
+  bpf.type = 'bandpass'; bpf.frequency.value = 7000; bpf.Q.value = 1.5;
+  const hpf = audioCtx.createBiquadFilter();
+  hpf.type = 'highpass'; hpf.frequency.value = 6000;
+  const metalEnv = audioCtx.createGain();
+  summer.connect(bpf); bpf.connect(hpf); hpf.connect(metalEnv); metalEnv.connect(out);
+  metalEnv.gain.setValueAtTime(0, when);
+  metalEnv.gain.linearRampToValueAtTime(0.55, when + 0.001);
+  metalEnv.gain.exponentialRampToValueAtTime(0.0008, when + decayMs / 1000);
+
+  // Airy "tss" — highpassed noise for the breath component.
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoiseBuffer(0.30);
+  const noiseHpf = audioCtx.createBiquadFilter();
+  noiseHpf.type = 'highpass'; noiseHpf.frequency.value = 7500;
+  const noiseEnv = audioCtx.createGain();
+  noise.connect(noiseHpf); noiseHpf.connect(noiseEnv); noiseEnv.connect(out);
+  noiseEnv.gain.setValueAtTime(0, when);
+  noiseEnv.gain.linearRampToValueAtTime(0.35, when + 0.001);
+  noiseEnv.gain.exponentialRampToValueAtTime(0.0008, when + (decayMs * 0.6) / 1000);
+  noise.start(when);
+
+  return {
+    output: out,
+    stop: (whenStop) => {
+      const t = Math.max(whenStop, when + (decayMs + 50) / 1000);
+      for (const o of oscs) { try { o.stop(t); } catch (e) {} }
+      try { noise.stop(t); } catch (e) {}
+    },
     detune: null,
   };
 };

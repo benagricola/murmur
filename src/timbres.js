@@ -59,10 +59,14 @@ export function generateSnare() {
 }
 
 export function generateHihat() {
+  // 70% closed (tight, ~50ms decay), 30% open (longer ring, ~250ms).
+  // The hihat voice reads params.open to pick between the two
+  // envelopes — see src/audio/voices.js.
+  const open = Math.random() < 0.3;
   return packRole({
     patch: {
-      layers: [{ voice: 'hihat', gain: 1, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 80 },
+      layers: [{ voice: 'hihat', gain: 1, params: { open } }],
+      envelope: { attackMs: 2, releaseMs: open ? 280 : 80 },
       category: 'drum',
     },
     intervalMs: BAR_MS / 8,

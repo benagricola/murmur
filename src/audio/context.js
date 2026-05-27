@@ -12,6 +12,14 @@
 
 export let audioCtx = null;
 export let masterGain = null;
+// Drum bus — drum-category voices route here instead of straight to
+// masterGain. Path: drumBus → drumCompressor → masterGain. The
+// compressor gives the kit unified "glue": a kick transient lightly
+// ducks the snare/hat tails so the whole rhythm punches as one
+// instrument rather than three stacked. Settings tuned for "tight,
+// not squashed" — 4:1 ratio, fast attack, medium release, low knee.
+export let drumBus = null;
+export let drumCompressor = null;
 export let supportsPeriodicWave = false;
 export const NUM_HARMONICS = 12;
 
@@ -47,6 +55,18 @@ export function tryCreateContext() {
     masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.35;
     masterGain.connect(audioCtx.destination);
+    // Drum bus + compressor. Routing: drumBus → drumCompressor →
+    // masterGain. Drum voices in routeFinalOutput tap this bus.
+    drumBus = audioCtx.createGain();
+    drumBus.gain.value = 1.0;
+    drumCompressor = audioCtx.createDynamicsCompressor();
+    drumCompressor.threshold.value = -18;   // start compressing past -18 dBFS
+    drumCompressor.knee.value = 6;          // soft knee for musicality
+    drumCompressor.ratio.value = 4;         // 4:1 — firm but not crushed
+    drumCompressor.attack.value = 0.003;    // fast — catch the transient
+    drumCompressor.release.value = 0.12;    // medium — let tails breathe
+    drumBus.connect(drumCompressor);
+    drumCompressor.connect(masterGain);
     // Detect PeriodicWave support (some older Android WebViews lack it)
     try {
       const w = audioCtx.createPeriodicWave(new Float32Array([0, 1, 0]), new Float32Array([0, 0, 0]));

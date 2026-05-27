@@ -9,7 +9,7 @@
 // point that every voice's output passes through on its way to the
 // master gain. Modifier-chain sends fan out from the same place.
 
-import { audioCtx, masterGain, initAudio } from './context.js';
+import { audioCtx, masterGain, drumBus, initAudio } from './context.js';
 import { activeEvents, seeds, state, seedById } from '../state.js';
 import { BAR_MS } from '../tempo.js';
 
@@ -49,13 +49,22 @@ export function activePulsesAffecting(seed) {
 // Centralised output routing. Every voice's enveloped signal goes
 // through here on its way to master — this is where pulse filters /
 // mutes apply and modifier sends fan out.
+//
+// Drum-category seeds route to drumBus (→ drumCompressor → masterGain)
+// instead of straight to masterGain. The compressor glues kick/snare/
+// hat into one cohesive kit. Tonal seeds skip the bus and hit
+// masterGain directly so they don't get pumped by the kick.
 export function routeFinalOutput(seed, node) {
   const pulses = activePulsesAffecting(seed);
   const muteBomb = pulses.find(b => b.kind === 'drop');
   if (!muteBomb) {
     const filterBomb = pulses.find(b => b.filterNode);
-    if (filterBomb) node.connect(filterBomb.filterNode);
-    else node.connect(masterGain);
+    if (filterBomb) {
+      node.connect(filterBomb.filterNode);
+    } else {
+      const isDrum = seed.patch && seed.patch.category === 'drum';
+      node.connect(isDrum && drumBus ? drumBus : masterGain);
+    }
     if (seed.capturedByIds && seed.capturedByIds.size > 0) {
       for (const id of seed.capturedByIds) {
         const m = seedById(id);
