@@ -448,10 +448,12 @@ function handleMIDIMessage(evt) {
   if (cmd === 0xb0) {
     const cc = data[1], v = data[2];
     if (cc === SUSTAIN_PEDAL_CC) { setSustainPedal(v >= 64); return; }
-    // Shift + transport buttons send momentary CCs on this template
-    // (instead of the Ableton-script note IDs 105-109 we used to
-    // see). Rising edge triggers the action; we ignore the release.
-    if (cc === TRANSPORT_CC.shiftPlay) {
+    // Shift + transport buttons send momentary action CCs. Rising
+    // edge (value crossing >= 64) triggers the action; the release
+    // back to 0 is ignored. We don't track the shift modifier
+    // ourselves — the device handles that internally and just sends
+    // us the action CC.
+    if (cc === TRANSPORT_CC.playStop) {
       const rising = v >= 64 && (lastTransportCC[cc] || 0) < 64;
       lastTransportCC[cc] = v;
       if (rising) {
@@ -460,13 +462,10 @@ function handleMIDIMessage(evt) {
       }
       return;
     }
-    // Other transport CCs whose function isn't yet known — log them
-    // so the user can press each button and see what fires, then
-    // tell us so we can map them in TRANSPORT_CC.
-    if (TRANSPORT_UNMAPPED_CCS.has(cc)) {
-      console.log(`[transport] unmapped CC ${cc} = ${v}`);
-      return;
-    }
+    // CCs we know about but don't act on (e.g. CC 27 is the bare
+    // shift-state indicator). Swallow them silently so they don't
+    // fall through to controls.js as encoder/fader CCs.
+    if (TRANSPORT_UNMAPPED_CCS.has(cc)) return;
     // MiniLab 3 main rotary (relative-1 encoding): 65-67 = +1..+3,
     // 61-63 = -3..-1, 64 = no change. Twist scrolls through pitched
     // roles; the patch for each role is cached and reused so

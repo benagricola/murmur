@@ -29,21 +29,30 @@ export const MOD_STRIP_CC = 1;
 
 // === Shift + transport buttons ===
 // On the user's current device template the round transport buttons
-// send CCs instead of the Ableton-script's note IDs (105-109). These
-// CCs were captured from the live MIDI log on the user's device.
-// They act like momentary buttons — press = value 127, release = 0
-// — so we trigger on the rising edge (value crossing >= 64).
+// send CCs instead of the Ableton-script's note IDs (105-109). The
+// device tracks shift state internally — when shift is held + a
+// dual-function pad is pressed, the device sends ONE CC for the
+// shifted action. We don't track shift ourselves; we just listen for
+// the action CC.
 //
-// Mapped values (so far, may need updating as more buttons are
-// tested):
-//   CC 27  = Shift + Play  (toggle play / stop)
-//   CC 107 = unknown — fires alongside CC 27, may be a Shift state
-//            indicator or a separate transport function. Captured
-//            for analysis but not wired yet.
+// CC fingerprint observed on a shift+play press (in order):
+//   CC 27  = 0      ← shift state: was on, now off (or device echo)
+//   CC 27  = 127    ← shift state: held
+//   CC 107 = 127    ← the actual shift+play action
+//
+// So CC 27 is the bare Shift button — ignore it. CC 107 is the
+// transport action. Trigger on rising edge (value crossing >= 64);
+// the release (back to 0) is ignored.
+//
+// Other transport CCs (shift+stop, shift+record, shift+tap, shift+
+// loop) need to be enumerated and added here once the user reports
+// the CC number each sends.
 export const TRANSPORT_CC = {
-  shiftPlay: 27,
+  playStop: 107,
 };
-export const TRANSPORT_UNMAPPED_CCS = new Set([107]);   // log only, don't act
+// CC 27 is just the shift modifier state echoed by the device — log
+// it for visibility but never act on it.
+export const TRANSPORT_UNMAPPED_CCS = new Set([27]);
 
 // 8 panel encoders, slot 0..7, all absolute 0..127 in the user's
 // template. CC numbers are device-defaults — re-confirmed from a real
