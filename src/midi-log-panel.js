@@ -56,6 +56,13 @@ function classify(bytes) {
 
 // One-line decode so the user doesn't have to parse hex bytes in
 // their head. Returns a short string or '' if no useful decode.
+//
+// Note semantics use plain English (press/release) rather than the
+// MIDI terms (note-on/note-off) so it's unambiguous what the device
+// is reporting. Status bytes per MIDI 1.0:
+//   0x90 = note-on  (= PRESS when velocity > 0)
+//   0x80 = note-off (= RELEASE)
+//   0x90 with velocity 0 also conventionally means RELEASE.
 function decode(bytes) {
   const s = bytes[0] || 0;
   if (s === 0xF8) return 'clock tick';
@@ -78,8 +85,9 @@ function decode(bytes) {
   }
   const cmd = s & 0xF0;
   const ch = (s & 0x0F) + 1;
-  if (cmd === 0x90 && bytes[2] > 0) return `noteOn ch${ch} n${bytes[1]} v${bytes[2]}`;
-  if (cmd === 0x80 || (cmd === 0x90 && bytes[2] === 0)) return `noteOff ch${ch} n${bytes[1]}`;
+  if (cmd === 0x90 && bytes[2] > 0) return `PRESS   ch${ch} n${bytes[1]} v${bytes[2]} (status 0x90)`;
+  if (cmd === 0x80) return `RELEASE ch${ch} n${bytes[1]} (status 0x80)`;
+  if (cmd === 0x90 && bytes[2] === 0) return `RELEASE ch${ch} n${bytes[1]} (status 0x90 vel=0)`;
   if (cmd === 0xB0) return `cc${bytes[1]}=${bytes[2]} ch${ch}`;
   if (cmd === 0xE0) {
     const v = ((bytes[2] << 7) | bytes[1]) - 8192;
@@ -141,59 +149,93 @@ function abbreviatePort(name) {
   return s.replace(/^.*minilab[\d ]*/i, '').trim() || 'minilab';
 }
 
+// Track which entries have already been DOM-appended so we don't
+// wipe and rebuild on every frame — that's what killed text
+// selection and made the panel impossible to copy from.
+let lastRenderedEntryId = 0;
+let needsFullRebuild = true;
+
+function buildRow(e) {
+  const row = document.createElement('div');
+  row.className = `mlog-row mlog-${e.direction.toLowerCase()} mlog-cat-${e.cat}`;
+  // Stash the raw bytes on the element so the "copy" button can read
+  // them off the visible rows.
+  row.dataset.copy = `+${(e.t / 1000).toFixed(2)}  ${e.direction}  ${abbreviatePort(e.port)}  ${e.decoded || ''}  ${e.hex}`;
+  const tEl = document.createElement('span');
+  tEl.className = 'mlog-t';
+  tEl.textContent = `+${(e.t / 1000).toFixed(2)}`;
+  row.appendChild(tEl);
+  const dirEl = document.createElement('span');
+  dirEl.className = 'mlog-dir';
+  dirEl.textContent = e.direction;
+  row.appendChild(dirEl);
+  const portEl = document.createElement('span');
+  portEl.className = 'mlog-port';
+  portEl.textContent = abbreviatePort(e.port);
+  row.appendChild(portEl);
+  const decodedEl = document.createElement('span');
+  decodedEl.className = 'mlog-decoded';
+  decodedEl.textContent = e.decoded;
+  row.appendChild(decodedEl);
+  const hexEl = document.createElement('span');
+  hexEl.className = 'mlog-hex';
+  if (e.bytes.length > 14) {
+    const head = e.bytes.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    const tail = e.bytes[e.bytes.length - 1].toString(16).padStart(2, '0');
+    hexEl.textContent = `${head} … ${tail}`;
+  } else {
+    hexEl.textContent = e.hex;
+  }
+  row.appendChild(hexEl);
+  return row;
+}
+
 function render() {
   if (!listEl) return;
-  // Preserve scroll state across the diff-render. Only auto-scroll to
-  // the newest entry if the user was already pinned to the bottom — if
-  // they've scrolled up to read history, leave their position alone.
+  // Preserve scroll state. Only auto-scroll if the user is already
+  // pinned to the bottom; if they've scrolled up to read history,
+  // leave their position alone.
   const wasPinned = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 30;
-  // Find the slice of entries that pass the current filters. We trim
-  // to last 200 visible.
-  const visibleEntries = [];
-  for (let i = entries.length - 1; i >= 0 && visibleEntries.length < 200; i--) {
-    if (shouldShow(entries[i])) visibleEntries.unshift(entries[i]);
+  if (needsFullRebuild) {
+    listEl.innerHTML = '';
+    lastRenderedEntryId = 0;
+    needsFullRebuild = false;
   }
-  // Diff-render by clearing + rebuilding.
+  // Append only entries the DOM hasn't seen yet. Existing rows stay
+  // put — that preserves text selection and means scrolling actually
+  // works while new traffic streams in.
   const frag = document.createDocumentFragment();
-  visibleEntries.forEach((e, idx) => {
-    const row = document.createElement('div');
-    row.className = `mlog-row mlog-${e.direction.toLowerCase()} mlog-cat-${e.cat}`;
-    // Mark the very last (most recent) row so the user can see at a
-    // glance which row appeared most recently — easier to diagnose
-    // order-of-events questions.
-    if (idx === visibleEntries.length - 1) row.classList.add('mlog-latest');
-    const tEl = document.createElement('span');
-    tEl.className = 'mlog-t';
-    tEl.textContent = `+${(e.t / 1000).toFixed(2)}`;
-    row.appendChild(tEl);
-    const dirEl = document.createElement('span');
-    dirEl.className = 'mlog-dir';
-    dirEl.textContent = e.direction;
-    row.appendChild(dirEl);
-    const portEl = document.createElement('span');
-    portEl.className = 'mlog-port';
-    portEl.textContent = abbreviatePort(e.port);
-    row.appendChild(portEl);
-    const decodedEl = document.createElement('span');
-    decodedEl.className = 'mlog-decoded';
-    decodedEl.textContent = e.decoded;
-    row.appendChild(decodedEl);
-    const hexEl = document.createElement('span');
-    hexEl.className = 'mlog-hex';
-    // Truncate very long sysex hex to first 8 + ... + last 1 bytes
-    if (e.bytes.length > 14) {
-      const head = e.bytes.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(' ');
-      const tail = e.bytes[e.bytes.length - 1].toString(16).padStart(2, '0');
-      hexEl.textContent = `${head} … ${tail}`;
-    } else {
-      hexEl.textContent = e.hex;
-    }
-    row.appendChild(hexEl);
-    frag.appendChild(row);
-  });
-  listEl.innerHTML = '';
-  listEl.appendChild(frag);
-  if (wasPinned) listEl.scrollTop = listEl.scrollHeight;
+  for (const e of entries) {
+    if (e.id <= lastRenderedEntryId) continue;
+    if (shouldShow(e)) frag.appendChild(buildRow(e));
+    lastRenderedEntryId = e.id;
+  }
+  if (frag.childNodes.length > 0) {
+    listEl.appendChild(frag);
+    // Prune from the top once we have too many rows.
+    while (listEl.children.length > 250) listEl.firstChild.remove();
+    if (wasPinned) listEl.scrollTop = listEl.scrollHeight;
+  }
+}
+
+function copyVisibleToClipboard() {
+  if (!listEl) return;
+  const lines = [];
+  for (const row of listEl.children) {
+    lines.push(row.dataset.copy || row.textContent);
+  }
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text)
+    .then(() => console.log(`[mlog] copied ${lines.length} rows to clipboard`))
+    .catch(err => {
+      console.warn('[mlog] clipboard write failed; falling back to selection', err);
+      // Fallback: select the list so user can ctrl+c manually
+      const range = document.createRange();
+      range.selectNodeContents(listEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
 }
 
 // === DOM scaffolding ===
@@ -214,6 +256,7 @@ function buildPanel() {
       <button class="mlog-chip" data-cat="activeSense" title="Active Sense (0xFE)">sense</button>
       <button class="mlog-chip on" data-cat="other" title="Start/Stop/Continue/UDI replies">other</button>
     </span>
+    <button class="mlog-btn" id="mlog-copy" title="Copy all visible rows to clipboard">copy</button>
     <button class="mlog-btn" id="mlog-clear" title="Clear the log">clear</button>
     <button class="mlog-btn" id="mlog-close" title="Hide (toggle from top bar)">×</button>
   `;
@@ -222,17 +265,21 @@ function buildPanel() {
   list.className = 'mlog-list';
   root.appendChild(list);
   document.body.appendChild(root);
-  // Wire chips
+  // Wire chips — filter toggle requires a full rebuild because the
+  // visible-row set changes.
   header.querySelectorAll('.mlog-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       const cat = chip.dataset.cat;
       filters[cat] = !filters[cat];
       chip.classList.toggle('on', filters[cat]);
+      needsFullRebuild = true;
       scheduleRender();
     });
   });
+  header.querySelector('#mlog-copy').addEventListener('click', copyVisibleToClipboard);
   header.querySelector('#mlog-clear').addEventListener('click', () => {
     entries.length = 0;
+    needsFullRebuild = true;
     render();
   });
   header.querySelector('#mlog-close').addEventListener('click', () => {

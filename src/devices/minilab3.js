@@ -27,6 +27,24 @@ export const DISPLAY_ENCODER_CLICK_CC = 118;
 export const SUSTAIN_PEDAL_CC = 64;
 export const MOD_STRIP_CC = 1;
 
+// === Shift + transport buttons ===
+// On the user's current device template the round transport buttons
+// send CCs instead of the Ableton-script's note IDs (105-109). These
+// CCs were captured from the live MIDI log on the user's device.
+// They act like momentary buttons — press = value 127, release = 0
+// — so we trigger on the rising edge (value crossing >= 64).
+//
+// Mapped values (so far, may need updating as more buttons are
+// tested):
+//   CC 27  = Shift + Play  (toggle play / stop)
+//   CC 107 = unknown — fires alongside CC 27, may be a Shift state
+//            indicator or a separate transport function. Captured
+//            for analysis but not wired yet.
+export const TRANSPORT_CC = {
+  shiftPlay: 27,
+};
+export const TRANSPORT_UNMAPPED_CCS = new Set([107]);   // log only, don't act
+
 // 8 panel encoders, slot 0..7, all absolute 0..127 in the user's
 // template. CC numbers are device-defaults — re-confirmed from a real
 // MIDI log against the user's MiniLab 3.

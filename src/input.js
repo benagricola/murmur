@@ -157,6 +157,8 @@ import {
   DISPLAY_ENCODER_CLICK_CC,
   SUSTAIN_PEDAL_CC,
   ENCODER_LONG_PRESS_MS,
+  TRANSPORT_CC,
+  TRANSPORT_UNMAPPED_CCS,
 } from './devices/minilab3.js';
 
 // === MIDI debug log ===
@@ -172,6 +174,10 @@ let midiVerbose = false;
 // from history). 500ms threshold matches the device's own long-press
 // feel on the OLED-mode button.
 let encoderPressedMs = 0;
+
+// Last-seen value per transport CC so we can detect rising-edge
+// (button press) vs falling-edge (release). Keyed by CC number.
+const lastTransportCC = {};
 const midiSessionStart = performance.now();
 
 function midiCmdName(status) {
@@ -436,6 +442,25 @@ function handleMIDIMessage(evt) {
   if (cmd === 0xb0) {
     const cc = data[1], v = data[2];
     if (cc === SUSTAIN_PEDAL_CC) { setSustainPedal(v >= 64); return; }
+    // Shift + transport buttons send momentary CCs on this template
+    // (instead of the Ableton-script note IDs 105-109 we used to
+    // see). Rising edge triggers the action; we ignore the release.
+    if (cc === TRANSPORT_CC.shiftPlay) {
+      const rising = v >= 64 && (lastTransportCC[cc] || 0) < 64;
+      lastTransportCC[cc] = v;
+      if (rising) {
+        if (state.isPlaying) transportStop();
+        else transportPlay();
+      }
+      return;
+    }
+    // Other transport CCs whose function isn't yet known — log them
+    // so the user can press each button and see what fires, then
+    // tell us so we can map them in TRANSPORT_CC.
+    if (TRANSPORT_UNMAPPED_CCS.has(cc)) {
+      console.log(`[transport] unmapped CC ${cc} = ${v}`);
+      return;
+    }
     // MiniLab 3 main rotary (relative-1 encoding): 65-67 = +1..+3,
     // 61-63 = -3..-1, 64 = no change. Twist scrolls through pitched
     // roles; the patch for each role is cached and reused so
