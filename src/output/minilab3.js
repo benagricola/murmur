@@ -157,6 +157,43 @@ function murmurTestPads(useTransientIds = false) {
 }
 if (typeof window !== 'undefined') window.murmurTestPads = murmurTestPads;
 
+// Mode-switch diagnostics — DevTools-callable. From the SysEx
+// research: the host can broadcast `02 00 40 62 <progId>` to force
+// the device into a specific top-level mode. `01` = DAW (where the
+// Ableton-style runtime-paint-every-frame model applies; sporadic
+// LED writes get clobbered back to default white). `02` = Arturia
+// mode (where LED RGB writes via the same 02 02 16 command persist
+// properly until power cycle).
+//
+// Use to test: `murmurArturiaMode()` then `murmurTestPads()` —
+// rainbow should now stick. `murmurDawMode()` returns to DAW
+// behaviour (useful if OLED stops responding in Arturia mode).
+function murmurArturiaMode() {
+  sendRaw([0x02, 0x00, 0x40, 0x62, 0x02]);
+  console.log('[minilab] switched to Arturia mode — LED RGB writes should now persist');
+  // Repaint so the new mode immediately shows our state.
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+}
+function murmurDawMode() {
+  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
+  console.log('[minilab] switched back to DAW mode');
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+}
+// Recall a specific User program slot 1..5 (User1 = pr_id 3). The
+// device should jump to that program; whatever LED / pad mappings
+// are saved there take effect immediately.
+function murmurRecallProgram(slot) {
+  if (slot < 1 || slot > 5) { console.warn('[minilab] slot must be 1..5'); return; }
+  const prId = 0x02 + slot;  // 1 -> 0x03, 5 -> 0x07
+  sendRaw([0x05, prId]);
+  console.log('[minilab] recalled User' + slot);
+}
+if (typeof window !== 'undefined') {
+  window.murmurArturiaMode = murmurArturiaMode;
+  window.murmurDawMode = murmurDawMode;
+  window.murmurRecallProgram = murmurRecallProgram;
+}
+
 // Parse a CSS hex colour to 7-bit RGB. The device's gamut is dimmer
 // than a screen, so we boost saturation slightly.
 function hex7(hex) {
