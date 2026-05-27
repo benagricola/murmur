@@ -290,7 +290,11 @@ export function setActiveRole(role) {
 // Includes the three drum roles too — kick/snare/hat play pitched
 // versions of themselves on the keyboard, which is musically odd but
 // playable and gives more variety per encoder turn.
-const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice', 'kick', 'snare', 'hat'];
+// Pitched roles only. Drums live on bank A pads 1-4 — they don't
+// make sense as a keyboard timbre (one kick voice doesn't change
+// pitch in a musically useful way per key) and would force the user
+// to scroll past three "useless on the keys" entries.
+const LIVE_TIMBRE_CYCLE = ['bass', 'melody', 'voice'];
 let liveTimbreIdx = 1;  // melody
 
 // Cache one patch per role so twisting the encoder swaps between
