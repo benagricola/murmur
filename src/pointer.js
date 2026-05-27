@@ -351,7 +351,9 @@ if (toolPaletteToggle && toolPalette) {
 function buildPalette() {
   const el = document.getElementById('palette');
   if (!el) return;
-  el.innerHTML = '<span class="palette-label">palette</span>';
+  // Swatches sit under the "Seeds" tool-heading already — no need
+  // for a redundant "palette" sub-label.
+  el.innerHTML = '';
   for (const [roleKey, def] of Object.entries(TIMBRE_ROLES)) {
     const item = document.createElement('div');
     item.className = 'palette-item';

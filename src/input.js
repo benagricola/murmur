@@ -474,6 +474,8 @@ const heldKeys = new Set();
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Never steal browser / OS shortcuts. Bare letter / spacebar only.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   const key = e.key.toLowerCase();
   if (key === ' ') {
     e.preventDefault();
