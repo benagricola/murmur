@@ -75,8 +75,12 @@ export function connectMinilab(outputs) {
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
   sendRaw([0x01, 0x00, 0x40, 0x01]);
   // After handshake the device is ready to accept LED and screen
-  // writes. Push initial state so the user sees something immediately.
-  setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+  // writes. The first paint sometimes lands before the device has
+  // finished processing the handshake — pads then stay white until
+  // the next state change forces a repaint. Hedge with two paints
+  // at staggered delays so at least one is guaranteed to take.
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 250);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 1000);
   return true;
 }
 

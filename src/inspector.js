@@ -66,10 +66,18 @@ export function selectSeed(id) {
   state.selectedSeedId = id;
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
-  document.getElementById('insp-sub').textContent =
-    seed.kind === 'modifier'
-      ? `${categoryLabel('modifier')} · ${labelFor(seed.modifierKind)}`
-      : `${categoryLabel('voice')}${seed.role ? ' · ' + seed.role : ''}`;
+  // Sub-line: "aura · ripple" or "seed · melody · amber willow".
+  // The generative patch name lets the user tell at a glance
+  // whether a re-roll actually produced a new sound.
+  const patchName = seed.patch && seed.patch.name;
+  let subLine;
+  if (seed.kind === 'modifier') {
+    subLine = `${categoryLabel('modifier')} · ${labelFor(seed.modifierKind)}`;
+  } else {
+    subLine = `${categoryLabel('voice')}${seed.role ? ' · ' + seed.role : ''}`;
+    if (patchName) subLine += ' · ' + patchName;
+  }
+  document.getElementById('insp-sub').textContent = subLine;
 
   const presetRow = document.getElementById('preset-row');
   const regenBtn = document.getElementById('regen-btn');
@@ -392,10 +400,32 @@ function updatePatternFromMouse(e) {
 }
 
 document.getElementById('insp-close').addEventListener('click', () => {
+  closeInspector();
+});
+
+// Close + fully reset the inspector. Used by the close button and
+// by anything that needs the panel to start cold (e.g. selecting a
+// different seed after closing). Clears the inner text so a stale
+// label doesn't briefly flash before the new selection rebuilds.
+export function closeInspector() {
   inspectorEl.classList.remove('open');
   state.selectedSeedId = null;
+  document.getElementById('insp-title').textContent = '';
+  document.getElementById('insp-sub').textContent = '';
+  const capInfo = document.getElementById('captured-info');
+  if (capInfo) capInfo.style.display = 'none';
   syncRenderedSeeds();
-});
+  refreshSelectionLights();
+  paintScreen();
+}
+
+// Re-render the inspector for the currently-selected seed. Cheap to
+// call (idempotent); used to reflect external parameter changes
+// (encoder twists, pad-driven mode switches, etc.) in the on-screen
+// pickers and toggles.
+export function refreshInspector() {
+  if (state.selectedSeedId) selectSeed(state.selectedSeedId);
+}
 document.getElementById('pitch-slider').addEventListener('input', (e) => {
   const s = seedById(state.selectedSeedId);
   if (!s) return;

@@ -26,6 +26,9 @@ export const state = {
   // Pointer drag state — populated by input/pointer.js, read by the
   // tick loop so the live sweep-line preview can render mid-drag.
   sweepDrag: null,
+  // User-driven octave offset for live keyboard input, on top of
+  // the per-role shift. Set by encoder 1 when no seed is selected.
+  liveOctave: 0,
 };
 
 export function seedById(id) { return seeds.find(s => s.id === id); }

@@ -10,11 +10,16 @@
 import { makeHarmonicsArr, pickWeighted } from './constants.js';
 import { harmonicsForPatch } from './audio/patches.js';
 import { BAR_MS } from './tempo.js';
+import { generateName } from './names.js';
 
 // Pack a generator's output into the legacy + patch shape. Used by every
 // role generator so the call sites stay consistent.
 function packRole({ patch, intervalMs, fundamentalHz, synthesisModel }) {
   const env = patch.envelope || { attackMs: 8, releaseMs: 400 };
+  // Every generated patch gets a unique-ish two-word name so the
+  // user has a visible marker that a re-roll actually produced a
+  // new sound. ~2,500 combinations from a curated dictionary.
+  patch.name = generateName();
   return {
     harmonics: harmonicsForPatch(patch),
     decay: env.releaseMs,
@@ -23,6 +28,7 @@ function packRole({ patch, intervalMs, fundamentalHz, synthesisModel }) {
     fundamentalHz,
     synthesisModel,
     patch,
+    name: patch.name,
   };
 }
 

@@ -25,8 +25,8 @@
         <span>guardrails</span>
         <span class="guard-pill on" id="guard-pill"></span>
       </div>
-      <div class="vol-wrap"><span>vol</span><input type="range" class="std" id="vol" min="0" max="100" value="35"></div>
-      <div class="vol-wrap"><span>tempo</span><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span id="tempo-val">120 bpm</span></div>
+      <div class="vol-wrap"><span>vol</span><span class="soft-wrap"><input type="range" class="std" id="vol" min="0" max="100" value="35"><span class="soft-marker" id="vol-soft-marker"></span></span></div>
+      <div class="vol-wrap"><span>tempo</span><span class="soft-wrap"><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span class="soft-marker" id="tempo-soft-marker"></span></span><span id="tempo-val">120 bpm</span></div>
       <button class="btn" id="snap-btn">📷</button>
       <button class="btn" id="clear-btn" title="Clear canvas (a snapshot is taken first so you can revert)">clear</button>
       <button class="btn" id="midi-log-btn" title="Download the captured MIDI event log as JSON">midi log</button>

@@ -12,6 +12,7 @@ import {
 import {
   refreshPadLights, paintScreen, startClockOut, stopClockOut,
 } from './output/minilab3.js';
+import { disengageFader } from './controls.js';
 
 // High-level tempo change — updates tempo state, then rescales every
 // seed's bar-fraction-derived timings (intervalMs, decay, attack, delay)
@@ -149,6 +150,9 @@ playBtn.addEventListener('click', async () => {
 
 document.getElementById('vol').addEventListener('input', (e) => {
   setMasterVol(parseFloat(e.target.value) / 100);
+  // Web slider was just moved — disengage the matching physical
+  // fader so it has to catch the new value before taking over.
+  disengageFader('vol');
 });
 
 // Browsers restore slider values across reloads, but the AudioContext
@@ -162,6 +166,7 @@ onContextCreated(() => {
 
 document.getElementById('tempo-slider').addEventListener('input', (e) => {
   setBPM(parseInt(e.target.value));
+  disengageFader('tempo-slider');
 });
 
 // Guardrails toggle. Emits a `guardrails-changed` event so other

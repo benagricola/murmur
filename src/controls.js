@@ -24,6 +24,8 @@ import { renderSeed } from './seeds.js';
 import { setBPM } from './transport.js';
 import { BPM } from './tempo.js';
 import { popupEncoder, popupFader } from './output/minilab3.js';
+import { refreshInspector } from './inspector.js';
+import { liveTimbre, LIVE_ROLE_OCTAVE_SHIFT } from './timbres.js';
 
 // Map an encoder CC to its slot index (0..7).
 const ENCODER_CCS = [86, 87, 89, 90, 110, 111, 116, 117];
@@ -57,33 +59,103 @@ export function handleControlCC(cc, value) {
   return false;
 }
 
+// === Soft takeover for faders ===
+// Without this, the moment the physical fader sends ANY value, the
+// on-screen slider snaps to it — which is jarring when the two are
+// far apart. Soft takeover holds the on-screen value steady until
+// the physical fader passes through the current value (catches it),
+// then "engages" and tracks normally. Until catch, a marker shows
+// where the physical fader is so the user knows which way to move.
+
+const FADER_DEFS = [
+  { slot: 0, sliderId: 'vol', markerId: 'vol-soft-marker', min: 0, max: 100,
+    apply: v => setMasterVol(v / 100),
+    popup: v => popupFader(toCC(v, 0, 100), 'volume', Math.round(v) + '%') },
+  { slot: 1, sliderId: 'tempo-slider', markerId: 'tempo-soft-marker', min: 60, max: 180,
+    apply: v => setBPM(Math.round(v)),
+    popup: v => popupFader(toCC(v, 60, 180), 'tempo', Math.round(v) + ' bpm') },
+];
+const faderEngaged = [false, false, false, false];
+const faderPhysical = [null, null, null, null];  // last value 0..127
+
+function toCC(value, lo, hi) { return Math.round(((value - lo) / (hi - lo)) * 127); }
+
+function updateSoftMarker(idx) {
+  const def = FADER_DEFS[idx];
+  if (!def) return;
+  const marker = document.getElementById(def.markerId);
+  if (!marker) return;
+  if (faderEngaged[idx] || faderPhysical[idx] == null) {
+    marker.classList.remove('show');
+    return;
+  }
+  marker.classList.add('show');
+  marker.style.left = (faderPhysical[idx] / 127 * 100) + '%';
+}
+
 function handleFader(idx, value) {
-  if (idx === 0) {
-    const v = cc01(value);
-    setMasterVol(v);
-    const slider = document.getElementById('vol');
-    if (slider) slider.value = Math.round(v * 100);
-    popupFader(value, 'volume', Math.round(v * 100) + '%');
+  const def = FADER_DEFS[idx];
+  if (!def) return false;
+  const slider = document.getElementById(def.sliderId);
+  const webValue = slider ? parseFloat(slider.value) : def.min;
+  const physicalAsValue = def.min + (value / 127) * (def.max - def.min);
+  const prevPhysical = faderPhysical[idx];
+  faderPhysical[idx] = value;
+
+  if (faderEngaged[idx]) {
+    // Already caught — track normally.
+    def.apply(physicalAsValue);
+    if (slider) slider.value = physicalAsValue;
+    def.popup(physicalAsValue);
+    updateSoftMarker(idx);
     return true;
   }
-  if (idx === 1) {
-    const bpm = Math.round(ccRange(value, 60, 180));
-    setBPM(bpm);
-    const slider = document.getElementById('tempo-slider');
-    if (slider) slider.value = bpm;
-    popupFader(value, 'tempo', bpm + ' bpm');
-    return true;
+
+  // Not engaged yet — check if this move crossed (or hit within ε)
+  // the current on-screen value. If so, engage from this point.
+  if (prevPhysical != null) {
+    const prevAsValue = def.min + (prevPhysical / 127) * (def.max - def.min);
+    const crossed = (prevAsValue <= webValue && physicalAsValue >= webValue) ||
+                    (prevAsValue >= webValue && physicalAsValue <= webValue);
+    if (crossed) {
+      faderEngaged[idx] = true;
+      def.apply(physicalAsValue);
+      if (slider) slider.value = physicalAsValue;
+      def.popup(physicalAsValue);
+      updateSoftMarker(idx);
+      return true;
+    }
   }
-  // Faders 3 and 4 reserved for future globals (filter, send).
-  return false;
+  // Still chasing — update the marker so the user can see where
+  // they need to move TO catch the on-screen value.
+  updateSoftMarker(idx);
+  return true;
+}
+
+// Called from transport.js whenever the on-screen slider is moved.
+// Disengages the matching fader so the physical fader has to catch
+// the new value again before it takes over.
+export function disengageFader(sliderId) {
+  for (let i = 0; i < FADER_DEFS.length; i++) {
+    if (FADER_DEFS[i].sliderId === sliderId) {
+      faderEngaged[i] = false;
+      updateSoftMarker(i);
+      return;
+    }
+  }
 }
 
 function handleEncoderNoSelection(idx, value) {
   // With nothing selected the encoders steer the live keyboard tone.
-  // Slot 0-3 modulate the four most audibly-useful live params; the
-  // rest are reserved.
+  // Encoder 1: octave shift on top of the per-role default. Range
+  // -3..+3 octaves. The other slots are reserved for future live
+  // params (timbre brightness, layer mix, etc.).
   if (idx === 0) {
-    // No-op for now — live-timbre roll is on the main rotary (CC 28).
+    const oct = Math.round(ccRange(value, -3, 3));
+    state.liveOctave = oct;
+    const sign = oct > 0 ? '+' : '';
+    popupEncoder(value, 'live oct', sign + oct);
+    return true;
   }
   return false;
 }
@@ -119,6 +191,7 @@ function handleEncoderVoice(seed, idx, value) {
         seed.nextTrigger = 0;
       }
       popupEncoder(value, 'rhythm', opt ? opt.label : '');
+      refreshInspector();
       return true;
     }
     case 2: {
@@ -128,11 +201,13 @@ function handleEncoderVoice(seed, idx, value) {
         seed._cachedPatch = null;
       }
       popupEncoder(value, 'length', opt ? opt.label : '');
+      refreshInspector();
       return true;
     }
     case 3: {
       seed.gain = ccRange(value, 0.05, 0.6);
       popupEncoder(value, 'gain', Math.round(seed.gain * 100) + '%');
+      refreshInspector();
       return true;
     }
     case 4: case 5: case 6: case 7: {
@@ -143,6 +218,7 @@ function handleEncoderVoice(seed, idx, value) {
         renderSeed(seed);
       }
       popupEncoder(value, 'harm ' + (harmonicIdx + 2), Math.round(amp * 100) + '%');
+      refreshInspector();
       return true;
     }
   }
@@ -158,12 +234,14 @@ function handleEncoderModifier(seed, idx, value) {
     const opt = SPHERE_OPTIONS[ccPickIdx(value, SPHERE_OPTIONS)];
     if (opt) seed.sphereR = opt.r;
     popupEncoder(value, 'reach', opt ? opt.label : '');
+    refreshInspector();
     return true;
   }
   if (idx === 1) {
     if (seed.modifierKind === 'weave') {
       seed.swing = ccRange(value, 0.50, 0.75);
       popupEncoder(value, 'swing', seed.swing.toFixed(2));
+      refreshInspector();
       return true;
     }
     if (seed.modifierKind === 'ripple') {
@@ -172,16 +250,19 @@ function handleEncoderModifier(seed, idx, value) {
         seed.delayNode.delayTime.setTargetAtTime(seed.delayMs / 1000, audioCtx.currentTime, 0.02);
       }
       popupEncoder(value, 'delay', Math.round(seed.delayMs) + 'ms');
+      refreshInspector();
       return true;
     }
     if (seed.modifierKind === 'cloud') {
       seed.reverbSec = ccRange(value, 0.5, 5.0);
       popupEncoder(value, 'size', seed.reverbSec.toFixed(1) + 's');
+      refreshInspector();
       return true;
     }
     if (seed.modifierKind === 'poly') {
       seed.polyFactor = ccRange(value, 0.4, 1.6);
       popupEncoder(value, 'ratio', seed.polyFactor.toFixed(2));
+      refreshInspector();
       return true;
     }
   }

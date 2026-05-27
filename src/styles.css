@@ -430,6 +430,39 @@ body::before {
 }
 
 .vol-wrap { display: flex; gap: 8px; align-items: center; }
+
+/* Soft-takeover marker on the vol / tempo sliders. The wrap holds
+   the native range input + an absolutely-positioned marker line
+   showing where the MiniLab's physical fader currently sits when
+   it's out of sync with the on-screen slider. When the physical
+   fader catches the on-screen value (engages), the marker fades.
+   Until then, hardware fader moves don't affect the value — the
+   user sees the marker move and has to drag the physical fader
+   THROUGH the on-screen position to grab it. */
+.soft-wrap {
+  position: relative;
+  display: inline-block;
+  width: 70px;
+  height: 16px;
+  vertical-align: middle;
+}
+.soft-wrap input[type="range"].std {
+  width: 100%;
+  position: absolute;
+  inset: 0;
+}
+.soft-marker {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, left 0.05s;
+  border-radius: 1px;
+}
+.soft-marker.show { opacity: 0.75; }
 input[type="range"].std {
   -webkit-appearance: none;
   background: transparent;
