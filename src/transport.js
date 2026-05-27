@@ -15,20 +15,53 @@ import {
 import { disengageFader } from './controls.js';
 
 // High-level tempo change — updates tempo state, then rescales every
-// seed's bar-fraction-derived timings (intervalMs, decay, attack, delay)
-// so the music stays musically aligned across tempo changes, and
-// refreshes the on-screen BPM readout.
+// seed's bar-fraction-derived timings so music stays musically aligned.
+//
+// Phase preservation: we used to set `s.nextTrigger = 0` here, which
+// forced the scheduler to re-quantize to the next grid slot at the
+// new tempo. That produced an audible step on every BPM tick — when
+// the slider fires `input` 30 times during a drag, you hear 30
+// re-quantizations. Now we *rescale* nextTrigger by the same ratio
+// the interval changed by, so each seed continues from exactly its
+// current rhythmic position. No re-phase, no jump.
+//
+// Audio params: when `seed.delayMs` is changed, the delayNode's
+// `delayTime` AudioParam is also ramped via `setTargetAtTime` so the
+// audible delay tail follows smoothly instead of waiting for the
+// next encoder turn.
 export function setBPM(newBPM) {
   const oldBar = setTempo(newBPM);
+  const ratio = BAR_MS / oldBar;
+  const ctx = audioCtx;
+  const now = ctx ? ctx.currentTime : 0;
   for (const s of seeds) {
-    if (s.intervalMs) s.intervalMs = (s.intervalMs / oldBar) * BAR_MS;
-    if (s.decay)      s.decay      = (s.decay      / oldBar) * BAR_MS;
-    if (s.attackMs)   s.attackMs   = (s.attackMs   / oldBar) * BAR_MS;
-    if (s.delayMs)    s.delayMs    = (s.delayMs    / oldBar) * BAR_MS;
-    s.nextTrigger = 0;  // re-phase on next schedule pass
+    if (s.intervalMs) s.intervalMs = s.intervalMs * ratio;
+    if (s.decay)      s.decay      = s.decay      * ratio;
+    if (s.attackMs)   s.attackMs   = s.attackMs   * ratio;
+    if (s.delayMs) {
+      s.delayMs = s.delayMs * ratio;
+      // Live audio: ramp the delay-time param so the tail tracks
+      // tempo instead of jumping when the user next touches it.
+      if (s.delayNode && ctx) {
+        s.delayNode.delayTime.setTargetAtTime(s.delayMs / 1000, now, 0.05);
+      }
+    }
+    // Phase-preserve: rescale the time-until-next-trigger by the same
+    // ratio. Seeds keep playing through tempo changes without dropping
+    // or doubling notes.
+    if (s.nextTrigger && ctx) {
+      const remaining = s.nextTrigger - now;
+      if (remaining > 0) s.nextTrigger = now + remaining * ratio;
+    }
+  }
+  // Rescale playback start so quantize-from-start (used when nextTrigger
+  // is stale, e.g. just after a stop/play) lands on the right grid slot.
+  if (ctx && state.playbackStartTime) {
+    const since = now - state.playbackStartTime;
+    if (since > 0) state.playbackStartTime = now - since * ratio;
   }
   const el = document.getElementById('tempo-val');
-  if (el) el.textContent = BPM + ' bpm';
+  if (el) el.textContent = Math.round(BPM) + ' bpm';
 }
 
 // === Transport (pad-driven) ===
@@ -164,9 +197,25 @@ onContextCreated(() => {
   if (slider) setMasterVol(parseFloat(slider.value) / 100);
 });
 
+// Slider 'input' fires ~30Hz while dragging. Each fire used to run
+// setBPM(), which loops every seed and ramps audio params — at 30Hz
+// that's enough work to feel jittery. Coalesce into one update per
+// animation frame so the slider can fire freely but we only do real
+// work at the display refresh rate.
+let pendingBpm = null;
+let bpmRaf = 0;
 document.getElementById('tempo-slider').addEventListener('input', (e) => {
-  setBPM(parseInt(e.target.value));
+  pendingBpm = parseInt(e.target.value);
   disengageFader('tempo-slider');
+  if (!bpmRaf) {
+    bpmRaf = requestAnimationFrame(() => {
+      bpmRaf = 0;
+      if (pendingBpm != null) {
+        setBPM(pendingBpm);
+        pendingBpm = null;
+      }
+    });
+  }
 });
 
 // Guardrails toggle. Emits a `guardrails-changed` event so other
