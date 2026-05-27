@@ -62,7 +62,12 @@ export function routeFinalOutput(seed, node) {
     if (filterBomb) {
       node.connect(filterBomb.filterNode);
     } else {
-      const isDrum = seed.patch && seed.patch.category === 'drum';
+      // Both single-drum patches and drum-kit recordings (one seed,
+      // pattern steps reference DRUM_KIT slots) route through drumBus
+      // so they share the kit-glue compressor with everything else
+      // percussive.
+      const cat = seed.patch && seed.patch.category;
+      const isDrum = cat === 'drum' || cat === 'drum-kit';
       node.connect(isDrum && drumBus ? drumBus : masterGain);
     }
     if (seed.capturedByIds && seed.capturedByIds.size > 0) {

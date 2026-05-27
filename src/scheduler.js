@@ -24,19 +24,24 @@ import { seeds, activeEvents, state, seedById } from './state.js';
 import {
   SVGNS, seedNodes, blobPath, renderSeed,
 } from './seeds.js';
+import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 
 let stepHighlightHandler = null;
 export function setStepHighlightHandler(fn) { stepHighlightHandler = fn; }
 
-export function playNoteAt(seed, when, freq, gain, sustainMs) {
+export function playNoteAt(seed, when, freq, gain, sustainMs, patchOverride) {
   // All seeds dispatch through the patch player. Drums (category 'drum')
   // are one-shot inside playPatch; tonal patches get attack → sustain
   // → release shaped by patch.envelope.
-  const patch = seed.patch || patchFromLegacySeed(seed);
+  //
+  // patchOverride lets drum-kit seeds (one seed → many drum patches,
+  // one per pattern step) supply the per-step DRUM_KIT patch without
+  // mutating seed.patch.
+  const patch = patchOverride || seed.patch || patchFromLegacySeed(seed);
   // If a tonal seed has a legacy `decay` that differs from the patch's
   // releaseMs (e.g. user adjusted the length knob), prefer the live
   // seed value so inspector tweaks keep working post-refactor.
-  if (patch.category !== 'drum' && seed.decay) {
+  if (!patchOverride && patch.category !== 'drum' && seed.decay) {
     patch.envelope = patch.envelope || {};
     if (patch.envelope.releaseMs !== seed.decay) {
       patch.envelope = { ...patch.envelope, releaseMs: seed.decay };
@@ -66,8 +71,40 @@ export function playSeedStep(seed, when) {
     if (state.selectedSeedId === seed.id && stepHighlightHandler) stepHighlightHandler(seed);
   }, delayMs);
   if (step.velocity < 0.05) return;
-  const baseMidi = midiFromFreq(seed.fundamental);
   const baseGain = seed.gain || 0.35;
+  const stepDuration = step.duration !== undefined ? step.duration : 1.0;
+  const sustainMs = stepDuration * seed.intervalMs;
+  let fireAt = when;
+  if (!seed.quantize && step.tOffset) {
+    fireAt = when + (step.tOffset * seed.intervalMs) / 1000;
+  }
+
+  // === Drum-kit branch ===
+  // Step references a DRUM_KIT slot — fire that slot's patch instead
+  // of seed.patch. Extras may reference different slots (kick + hat
+  // together), all fired at the same fireAt.
+  if (step.drumSlot != null) {
+    const slot = DRUM_KIT[step.drumSlot];
+    if (slot && slot.patch) {
+      const slotFreq = DRUM_KIT_FUNDAMENTAL_HZ[step.drumSlot] || 220;
+      playNoteAt(seed, fireAt, slotFreq, baseGain * step.velocity, sustainMs, slot.patch);
+    }
+    if (step.extras && step.extras.length > 0) {
+      for (const ex of step.extras) {
+        const exSlot = DRUM_KIT[ex.drumSlot];
+        if (!exSlot || !exSlot.patch) continue;
+        const exFreq = DRUM_KIT_FUNDAMENTAL_HZ[ex.drumSlot] || 220;
+        const exDuration = ex.duration !== undefined ? ex.duration : stepDuration;
+        const exSustainMs = exDuration * seed.intervalMs;
+        const exVel = ex.velocity !== undefined ? ex.velocity : step.velocity;
+        playNoteAt(seed, fireAt, exFreq, baseGain * exVel, exSustainMs, exSlot.patch);
+      }
+    }
+    return;
+  }
+
+  // === Tonal branch (default) ===
+  const baseMidi = midiFromFreq(seed.fundamental);
   const targetMidi = baseMidi + (step.offset || 0);
   // seed.quantize gates two things: pitch snap-to-scale AND micro-
   // timing snap to the grid step. tOffset (set at record time) holds
@@ -75,19 +112,6 @@ export function playSeedStep(seed, when) {
   // is off so the user can switch between clean-grid and as-played.
   const finalMidi = seed.quantize ? snapToScale(targetMidi) : targetMidi;
   const freq = freqFromMidi(finalMidi);
-  // sustainMs MUST be a number for scheduled notes — undefined makes
-  // playPatch fall through to live mode, which never schedules voice
-  // stops and leaves oscillators running forever. Default to 1.0
-  // step-fractions so a pattern step with no explicit duration takes
-  // a full step's worth of time and self-terminates cleanly.
-  const stepDuration = step.duration !== undefined ? step.duration : 1.0;
-  const sustainMs = stepDuration * seed.intervalMs;
-  // tOffset is in fractions of a step (range ~[-0.5, +0.5]).
-  // Convert to seconds and add to the fire time. Quantize on = ignore.
-  let fireAt = when;
-  if (!seed.quantize && step.tOffset) {
-    fireAt = when + (step.tOffset * seed.intervalMs) / 1000;
-  }
   playNoteAt(seed, fireAt, freq, baseGain * step.velocity, sustainMs);
   if (step.extras && step.extras.length > 0) {
     for (const ex of step.extras) {

@@ -13,6 +13,7 @@ import {
 import { selectSeed } from './inspector.js';
 import { takeSnapshot } from './snapshots.js';
 import { refreshPadLights, paintScreen } from './output/minilab3.js';
+import { DRUM_KIT, DRUM_KIT_COLOURS, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 
 const RECORD_AUTO_FINISH_MS = 1500;  // stop after this much silence
 
@@ -40,10 +41,24 @@ export function finishRecording() {
   refreshPadLights(); paintScreen();
 
   if (!state.recordingBuffer || state.recordingBuffer.notes.length === 0) return;
-  const result = phraseFromRecording(state.recordingBuffer);
+  const buf = state.recordingBuffer;
   state.recordingBuffer = null;
-  if (!result) return;
 
+  // Split drum-pad hits from tonal notes. Drum hits get their own
+  // per-slot seeds (one seed per drum kit slot used); tonal notes
+  // become a single melodic seed via the original phraseFromRecording
+  // path. Either bucket can be empty.
+  const drumNotes = buf.notes.filter(n => n.kind === 'drum');
+  const tonalNotes = buf.notes.filter(n => n.kind !== 'drum');
+
+  if (drumNotes.length > 0) {
+    plantDrumKitSeed(drumNotes);
+  }
+
+  if (tonalNotes.length === 0) return;
+  const tonalBuf = { ...buf, notes: tonalNotes };
+  const result = phraseFromRecording(tonalBuf);
+  if (!result) return;
   const sel = seedById(state.selectedSeedId);
   if (sel && sel.kind === 'voice') {
     sel.pattern = result.pattern;
@@ -223,6 +238,114 @@ function plantRecordedSeed(result) {
   syncRenderedSeeds();
   selectSeed(seed.id);
   takeSnapshot('recorded ' + label);
+}
+
+// === Drum-kit recording → one seed per loop ===
+//
+// All drum-pad hits in a recording become ONE seed whose pattern
+// steps reference DRUM_KIT slots via step.drumSlot. Simultaneous
+// hits (e.g. kick + hat) ride along as `extras` on the primary step.
+// Scheduler at src/scheduler.js:playSeedStep dispatches each step's
+// drumSlot to the right DRUM_KIT[slot].patch, routing through drumBus
+// for kit-glue compression.
+//
+// This matches the "one beat = one thing on the canvas" mental
+// model. Per-drum re-roll / mute is a future inspector feature.
+function plantDrumKitSeed(drumNotes) {
+  if (drumNotes.length === 0) return;
+
+  const naturalStepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
+  const maxSteps = state.guardrails ? 16 : 32;
+  const totalSpan = Math.max(...drumNotes.map(n => n.t)) + naturalStepMs;
+  const stepMs = totalSpan > maxSteps * naturalStepMs
+    ? totalSpan / maxSteps
+    : naturalStepMs;
+  const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
+
+  // Bucket by step. Drum hits within the same step (regardless of
+  // slot) all live in the same bucket — kick + hat fired together
+  // is a drum chord. Different slots in the same bucket → extras.
+  // Same-slot duplicates within a step → louder wins.
+  const buckets = new Array(totalSteps).fill(null).map(() => []);
+  for (const n of drumNotes) {
+    const exactStep = n.t / stepMs;
+    const step = Math.min(totalSteps - 1, Math.round(exactStep));
+    const tOffset = Math.max(-0.49, Math.min(0.49, exactStep - step));
+    const existing = buckets[step].find(x => x.slot === n.slot);
+    if (existing) {
+      if (existing.velocity < n.velocity) {
+        existing.velocity = n.velocity;
+        existing.tOffset = tOffset;
+        existing.t = n.t;
+      }
+    } else {
+      buckets[step].push({ slot: n.slot, velocity: n.velocity, tOffset, t: n.t });
+    }
+  }
+  while (buckets.length > 1 && buckets[buckets.length - 1].length === 0) buckets.pop();
+
+  const pattern = buckets.map((bucket) => {
+    if (bucket.length === 0) return { drumSlot: 0, velocity: 0, duration: 1.0 };
+    // Loudest hit is the primary; others ride along as extras.
+    bucket.sort((a, b) => b.velocity - a.velocity);
+    const primary = bucket[0];
+    const step = {
+      drumSlot: primary.slot,
+      velocity: Math.max(0.3, Math.min(1.0, primary.velocity * 1.3)),
+      duration: 1.0,
+      tOffset: primary.tOffset,
+    };
+    if (bucket.length > 1) {
+      step.extras = bucket.slice(1).map(b => ({
+        drumSlot: b.slot,
+        velocity: Math.max(0.3, Math.min(1.0, b.velocity * 1.3)),
+        duration: 1.0,
+      }));
+    }
+    return step;
+  });
+
+  // Plant position: bottom-left area where demos put drums.
+  const n = seeds.filter(s => s.kind === 'voice').length;
+  const cx = 220 + (n % 3) * 140 + 30 * Math.random();
+  const cy = 600 + 30 * Math.random();
+
+  // Use the loudest drum's colour as the seed colour; label lists
+  // every kit slot used so the user can tell what's in the loop.
+  const slotsUsed = [...new Set(drumNotes.map(n => n.slot))];
+  const loudest = drumNotes.reduce((a, b) => a.velocity > b.velocity ? a : b).slot;
+  const color = DRUM_KIT_COLOURS[loudest] || '#aaaaaa';
+  const slotsLabel = slotsUsed.map(s => DRUM_KIT[s].name).join('+');
+
+  const seed = makeSeed({
+    cx, cy,
+    r: 50,
+    fundamental: 220,                 // unused for drum-kit; kept for shape
+    decay: BAR_MS / 4,
+    intervalMs: stepMs,
+    harmonics: new Array(NUM_HARMONICS).fill(0),
+    color,
+    label: 'drums · ' + slotsLabel,
+    pattern,
+    quantize: true,
+    role: 'drumkit',
+    // Marker patch: scheduler sees patch.category === 'drum-kit' and
+    // dispatches each step to DRUM_KIT[step.drumSlot] instead of
+    // using seed.patch directly.
+    patch: { category: 'drum-kit', layers: [] },
+  });
+
+  for (const m of seeds.filter(s => s.kind === 'modifier')) {
+    const d = Math.hypot(seed.cx - m.cx, seed.cy - m.cy);
+    if (d < m.sphereR) {
+      seed.capturedByIds.add(m.id);
+      m.capturedSeedIds.add(seed.id);
+    }
+  }
+
+  syncRenderedSeeds();
+  selectSeed(seed.id);
+  takeSnapshot('recorded drums · ' + slotsLabel);
 }
 
 document.getElementById('rec-btn').addEventListener('click', async () => {

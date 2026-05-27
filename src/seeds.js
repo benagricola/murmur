@@ -89,12 +89,21 @@ export function makeSeed(opts) {
           // seed's quantize toggle becomes a real playback choice —
           // on = snap to grid, off = honour the original micro-timing.
           if (s.tOffset !== undefined) copy.tOffset = s.tOffset;
+          // drumSlot: for drum-kit seeds, each step references a slot
+          // in DRUM_KIT (src/audio/drum-kit.js) so the scheduler can
+          // dispatch each step to the right drum's patch. Tonal seeds
+          // don't use this; absence means "use seed.patch".
+          if (s.drumSlot !== undefined) copy.drumSlot = s.drumSlot;
           if (s.extras && s.extras.length > 0) {
-            copy.extras = s.extras.map(e => ({
-              offset: e.offset || 0,
-              velocity: e.velocity !== undefined ? e.velocity : 1.0,
-              duration: e.duration,
-            }));
+            copy.extras = s.extras.map(e => {
+              const ec = {
+                offset: e.offset || 0,
+                velocity: e.velocity !== undefined ? e.velocity : 1.0,
+                duration: e.duration,
+              };
+              if (e.drumSlot !== undefined) ec.drumSlot = e.drumSlot;
+              return ec;
+            });
           }
           return copy;
         })

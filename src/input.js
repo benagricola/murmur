@@ -232,9 +232,26 @@ const lastTransportCC = {};
 // Bank-A pad N (notes 36-43) fires DRUM_KIT[N] at its fixed
 // fundamental, routed through drumBus so it gets the kit compressor
 // glue. One-shot — pad release ignored.
+//
+// While recording, each hit is also pushed into the recording buffer
+// with a kind:'drum' marker so finishRecording can split drum hits
+// from tonal notes and plant a drum loop as one seed per slot used.
 function fireDrumPad(slot, velocity) {
-  if (!audioCtx) { initAudio(); return; }
   if (slot < 0 || slot >= DRUM_KIT.length) return;
+  if (state.isRecording) {
+    if (!state.recordingBuffer) {
+      state.recordingBuffer = { startTime: performance.now(), notes: [], lastActivityMs: performance.now() };
+    }
+    state.recordingBuffer.notes.push({
+      kind: 'drum',
+      slot,
+      t: performance.now() - state.recordingBuffer.startTime,
+      velocity,
+    });
+    state.recordingBuffer.lastActivityMs = performance.now();
+    rescheduleRecordingAutoFinish();
+  }
+  if (!audioCtx) { initAudio(); return; }
   const freq = DRUM_KIT_FUNDAMENTAL_HZ[slot];
   const gain = Math.max(0.1, Math.min(1.0, velocity)) * 0.5;
   // Drum patches are category:'drum' so playPatch fires one-shot
