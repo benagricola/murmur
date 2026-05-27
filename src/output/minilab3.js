@@ -17,10 +17,23 @@ import { BPM } from '../tempo.js';
 import { noteName, freqFromMidi, midiFromFreq } from '../constants.js';
 import { labelFor } from '../labels.js';
 
-// SysEx header constants. The `42` at the end is the MiniLab 3
-// product byte and is fixed for this device family.
-const HEADER = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42];
-const FOOTER = [0xF7];
+// SysEx header / footer + every device-specific magic number live in
+// ./devices/minilab3.js — see that file for the binding rationale.
+import {
+  SYSEX_HEADER as HEADER,
+  SYSEX_FOOTER as FOOTER,
+  PAD_LED_ID_BANK_A,
+  PAD_LED_ID_BANK_B,
+  PAD_LED_ID_BANK_A_TRANSIENT,
+  PAD_LED_ID_BANK_B_TRANSIENT,
+  TRANSPORT_LED_ID,
+  PAD_BANK_A_5_8_PLANT_MODES as PLANT_MODE_BANK_A_5_8,
+  PAD_BANK_B_PLANT_MODES as PLANT_MODE_BANK_B,
+  SYSEX_CMD,
+  PORT_NAME_DEVICE,
+  PORT_NAME_DAW,
+  PORT_NAME_SPECIAL,
+} from '../devices/minilab3.js';
 
 // Two MIDI output bindings, each used for different traffic:
 //   midiOuts     — SysEx (LED + screen) destinations. In DAW mode the
@@ -45,8 +58,8 @@ let realtimeOut = null;
 // MiniLab-named port if name-matching fails (different firmware /
 // OS might have different conventions).
 export function connectMinilab(outputs) {
-  const allMinilab = (outputs || []).filter(o => /minilab/i.test(o.name || ''));
-  const dawPort = allMinilab.find(o => /\b(alv|midiin2|daw)\b/i.test(o.name || ''));
+  const allMinilab = (outputs || []).filter(o => PORT_NAME_DEVICE.test(o.name || ''));
+  const dawPort = allMinilab.find(o => PORT_NAME_DAW.test(o.name || ''));
   if (dawPort) midiOuts = [dawPort];
   else if (allMinilab.length > 0) midiOuts = allMinilab;
   else if (outputs && outputs.length > 0) midiOuts = [outputs[0]];
@@ -54,11 +67,7 @@ export function connectMinilab(outputs) {
   // Realtime port: the main keyboard/notes/clock port. We pick by
   // *exclusion* — any MiniLab port that ISN'T one of the named
   // special-purpose ports (ALV / MCU / HUI / DIN THRU / MIDIIN2 / DAW).
-  // The previous implementation also required the literal word "midi"
-  // to appear in the name, which excluded Windows naming conventions
-  // ("MINILAB3" with no "MIDI" suffix). Exclude-only is more portable.
-  const SPECIAL_PORT_RE = /\b(alv|mcu|hui|din[ _-]?thru|thru|midiin2|daw)\b/i;
-  realtimeOut = allMinilab.find(o => !SPECIAL_PORT_RE.test(o.name || ''))
+  realtimeOut = allMinilab.find(o => !PORT_NAME_SPECIAL.test(o.name || ''))
     || allMinilab[0] || null;
   if (midiOuts.length === 0) return false;
   console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name),
@@ -74,8 +83,8 @@ export function connectMinilab(outputs) {
   // Hello sequence from Ableton's __init__.py: enter DAW mode, then
   // request the device's current program. Reply lands on the input
   // port and is captured by the regular MIDI log.
-  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
-  sendRaw([0x01, 0x00, 0x40, 0x01]);
+  sendRaw(SYSEX_CMD.CONNECT_DAW);
+  sendRaw(SYSEX_CMD.REQUEST_PROGRAM);
   // After handshake the device is ready to accept LED and screen
   // writes. The 60ms initial paint (matching the original working
   // implementation) is critical — pad LEDs persist when written this
@@ -107,7 +116,7 @@ function sendUniversalDeviceInquiry() {
 
 export function disconnectMinilab() {
   if (midiOuts.length === 0) return;
-  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x20]);
+  sendRaw(SYSEX_CMD.DISCONNECT_DAW);
   midiOuts = [];
   stopClockTimer();
 }
@@ -130,20 +139,23 @@ function sendRaw(bytes) {
 // 0x57..0x5B (Loop / Stop / Play / Record / Tap). RGB values are
 // 7-bit (0..127), not 8-bit.
 
-const PAD_ID_BANK_A = [0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B];
-const PAD_ID_BANK_B = [0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B];
-const TRANSPORT_LOOP   = 0x57;
-const TRANSPORT_STOP   = 0x58;
-const TRANSPORT_PLAY   = 0x59;
-const TRANSPORT_RECORD = 0x5A;
-const TRANSPORT_TAP    = 0x5B;
+// Local aliases for the imported pad-ID arrays — keeps the call sites
+// compact and matches the names used throughout this module before
+// the binding extraction.
+const PAD_ID_BANK_A = PAD_LED_ID_BANK_A;
+const PAD_ID_BANK_B = PAD_LED_ID_BANK_B;
+const TRANSPORT_LOOP   = TRANSPORT_LED_ID.loop;
+const TRANSPORT_STOP   = TRANSPORT_LED_ID.stop;
+const TRANSPORT_PLAY   = TRANSPORT_LED_ID.play;
+const TRANSPORT_RECORD = TRANSPORT_LED_ID.record;
+const TRANSPORT_TAP    = TRANSPORT_LED_ID.tap;
 
 function rgb7(r, g, b) {
   return [r & 0x7F, g & 0x7F, b & 0x7F];
 }
 
 function setLed(id, r, g, b) {
-  sendRaw([0x02, 0x02, 0x16, id, ...rgb7(r, g, b)]);
+  sendRaw([...SYSEX_CMD.LED_PAINT, id, ...rgb7(r, g, b)]);
 }
 
 // LED diagnostic — run from DevTools as `murmurTestPads()`. Paints a
@@ -210,18 +222,19 @@ function paintOne(padIdx, hex = '#ff0000', opts = {}) {
   // `opts.alt = true` uses the transient pad IDs (0x04..0x1B) instead
   // of the persistent ones (0x34..0x4B). Some MiniLab 3 firmware
   // versions accept only one or the other for LED RGB writes.
-  const persistentBase = padIdx < 8 ? (0x34 + padIdx) : (0x44 + (padIdx - 8));
-  const transientBase  = padIdx < 8 ? (0x04 + padIdx) : (0x14 + (padIdx - 8));
-  const id = opts.alt ? transientBase : persistentBase;
+  const persistentTable = padIdx < 8 ? PAD_LED_ID_BANK_A : PAD_LED_ID_BANK_B;
+  const transientTable  = padIdx < 8 ? PAD_LED_ID_BANK_A_TRANSIENT : PAD_LED_ID_BANK_B_TRANSIENT;
+  const slot = padIdx < 8 ? padIdx : padIdx - 8;
+  const id = opts.alt ? transientTable[slot] : persistentTable[slot];
   const [r, g, b] = hex7(hex);
-  const bytes = [...HEADER, 0x02, 0x02, 0x16, id, r, g, b, ...FOOTER];
+  const bytes = [...HEADER, ...SYSEX_CMD.LED_PAINT, id, r, g, b, ...FOOTER];
   const hexStr = bytes.map(x => x.toString(16).padStart(2, '0')).join(' ');
   console.log(`[diag] paint pad ${padIdx} (id 0x${id.toString(16)}${opts.alt ? ' transient' : ''}) → ${hex}  bytes: ${hexStr}`);
   setLed(id, r, g, b);
 }
 
 function paintTransportPad(which, hex = '#ffffff') {
-  const map = { loop: 0x57, stop: 0x58, play: 0x59, record: 0x5A, tap: 0x5B };
+  const map = TRANSPORT_LED_ID;
   const id = map[which];
   if (!id) { console.warn('[diag] which must be one of:', Object.keys(map).join(' / ')); return; }
   const [r, g, b] = hex7(hex);
@@ -232,8 +245,8 @@ function paintTransportPad(which, hex = '#ffffff') {
 function reconnect() {
   console.log('[diag] re-running handshake + paint sequence');
   sendUniversalDeviceInquiry();
-  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
-  sendRaw([0x01, 0x00, 0x40, 0x01]);
+  sendRaw(SYSEX_CMD.CONNECT_DAW);
+  sendRaw(SYSEX_CMD.REQUEST_PROGRAM);
   setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
   setTimeout(() => { paintAllPads(); paintScreen(); }, 600);
 }
@@ -333,13 +346,13 @@ if (typeof window !== 'undefined') {
 // rainbow should now stick. `murmurDawMode()` returns to DAW
 // behaviour (useful if OLED stops responding in Arturia mode).
 function murmurArturiaMode() {
-  sendRaw([0x02, 0x00, 0x40, 0x62, 0x02]);
+  sendRaw(SYSEX_CMD.ARTURIA_MODE);
   console.log('[minilab] switched to Arturia mode — LED RGB writes should now persist');
   // Repaint so the new mode immediately shows our state.
   setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
 }
 function murmurDawMode() {
-  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
+  sendRaw(SYSEX_CMD.CONNECT_DAW);
   console.log('[minilab] switched back to DAW mode');
   setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
 }
@@ -389,8 +402,10 @@ const PLANT_MODE_COLORS = {
   ripple: '#e8a8c8',
   cloud:  '#d0d8e8',
 };
-const PLANT_MODE_BANK_A_5_8 = ['drop', 'muffle', 'thin', 'rise'];
-const PLANT_MODE_BANK_B = ['drop', 'muffle', 'thin', 'rise', 'voice', 'weave', 'ripple', 'cloud'];
+// PLANT_MODE_BANK_A_5_8 and PLANT_MODE_BANK_B are imported from
+// devices/minilab3.js (under the same names, via aliasing). Defined
+// there as the single source of truth shared with input.js so the
+// LED colour mapping and pad-press routing can't drift apart.
 
 export function paintAllPads() {
   if (midiOuts.length === 0) return;

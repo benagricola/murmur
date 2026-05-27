@@ -140,27 +140,22 @@ function setSustainPedal(down) {
   }
 }
 
-// === Pad routing (MiniLab 3) ===
-// Pads sit on MIDI channel 10.
-//   Bank A pads 1-4 (notes 36-39): pitched live notes — finger-drum
-//     surface.
-//   Bank A pads 5-8 (notes 40-43): the four "effect" plant modes —
-//     drop / muffle / thin / rise. Quick-fire accents you can
-//     reach while drumming on pads 1-4. Transport is no longer on
-//     these pads — use Shift+Play / Shift+Stop on the device instead,
-//     both of which send MIDI Real-Time and are already wired.
-//   Bank B (notes 44-51): full plant-mode picker — same as before.
-const PAD_BANK_A_PLANT_5_8 = ['drop', 'muffle', 'thin', 'rise'];
-const PAD_BANK_B_TO_PLANT = [
-  'drop',   // pad 1 (note 44)
-  'muffle', // pad 2 (note 45)
-  'thin',   // pad 3 (note 46)
-  'rise',   // pad 4 (note 47)
-  'voice',  // pad 5 (note 48)
-  'weave',  // pad 6 (note 49)
-  'ripple', // pad 7 (note 50)
-  'cloud',  // pad 8 (note 51)
-];
+// Pad routing (MiniLab 3) — assignments are device-conventions
+// declared in `./devices/minilab3.js`. Bank A pads 1-4 are finger-
+// drum live notes; bank A pads 5-8 are the four effect plant modes;
+// bank B is the full plant-mode picker. Transport sits behind the
+// device's Shift key, sending MIDI Real-Time.
+import {
+  PAD_CHANNEL,
+  PAD_NOTE_BANK_A_BASE,
+  PAD_NOTE_BANK_B_BASE,
+  PAD_BANK_A_5_8_PLANT_MODES as PAD_BANK_A_PLANT_5_8,
+  PAD_BANK_B_PLANT_MODES as PAD_BANK_B_TO_PLANT,
+  MAIN_ROTARY_CC,
+  DISPLAY_ENCODER_CLICK_CC,
+  SUSTAIN_PEDAL_CC,
+  ENCODER_LONG_PRESS_MS,
+} from './devices/minilab3.js';
 
 // === MIDI debug log ===
 // Every incoming MIDI message is recorded so we can dump a trace
@@ -435,28 +430,28 @@ function handleMIDIMessage(evt) {
   // Continuous controllers
   if (cmd === 0xb0) {
     const cc = data[1], v = data[2];
-    if (cc === 64) { setSustainPedal(v >= 64); return; }
+    if (cc === SUSTAIN_PEDAL_CC) { setSustainPedal(v >= 64); return; }
     // MiniLab 3 main rotary (relative-1 encoding): 65-67 = +1..+3,
     // 61-63 = -3..-1, 64 = no change. Twist scrolls through pitched
     // roles; the patch for each role is cached and reused so
     // scrolling doesn't continuously re-generate random sounds.
-    if (cc === 28) {
+    if (cc === MAIN_ROTARY_CC) {
       if (v > 64) rollLiveTimbre(1);
       else if (v < 64) rollLiveTimbre(-1);
       return;
     }
-    // Display encoder CLICK (CC 118). Press = 127, release = 0.
-    // Short press (< 500ms) re-rolls the current role's patch with a
-    // fresh variant (and pushes it onto a per-role history ring).
-    // Long press (>= 500ms) reverts to the previous entry in that
-    // history — undo for unwanted re-rolls.
-    if (cc === 118) {
+    // Display encoder CLICK. Press = 127, release = 0.
+    // Short press (< ENCODER_LONG_PRESS_MS) re-rolls the current
+    // role's patch with a fresh variant (and pushes it onto a per-
+    // role history ring). Long press (>= threshold) reverts to the
+    // previous entry in that history — undo for unwanted re-rolls.
+    if (cc === DISPLAY_ENCODER_CLICK_CC) {
       if (v >= 64) {
         encoderPressedMs = performance.now();
       } else {
         const held = encoderPressedMs ? performance.now() - encoderPressedMs : 0;
         encoderPressedMs = 0;
-        if (held >= 500) {
+        if (held >= ENCODER_LONG_PRESS_MS) {
           const reverted = revertLiveTimbre();
           if (!reverted) console.log('[encoder] nothing to revert in this role');
         } else {
@@ -473,16 +468,21 @@ function handleMIDIMessage(evt) {
   // Notes
   if (cmd === 0x90 && data[2] > 0) {
     const note = data[1], velocity = data[2];
-    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise)
-    if (channel === 10 && note >= 40 && note <= 43) {
-      const kind = PAD_BANK_A_PLANT_5_8[note - 40];
+    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise).
+    // Note range: PAD_NOTE_BANK_A_BASE + 4 .. + 7 inclusive.
+    const bankA5_8Lo = PAD_NOTE_BANK_A_BASE + 4;
+    const bankA5_8Hi = PAD_NOTE_BANK_A_BASE + 7;
+    if (channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankA5_8Hi) {
+      const kind = PAD_BANK_A_PLANT_5_8[note - bankA5_8Lo];
       if (kind && setPlantModeFn) setPlantModeFn(kind);
       flashMidiLED();
       return;
     }
-    // Bank B selects plant mode
-    if (channel === 10 && note >= 44 && note <= 51) {
-      const kind = PAD_BANK_B_TO_PLANT[note - 44];
+    // Bank B selects plant mode.
+    const bankBLo = PAD_NOTE_BANK_B_BASE;
+    const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
+    if (channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi) {
+      const kind = PAD_BANK_B_TO_PLANT[note - bankBLo];
       if (kind && setPlantModeFn) setPlantModeFn(kind);
       flashMidiLED();
       return;
@@ -492,7 +492,10 @@ function handleMIDIMessage(evt) {
   }
   if (cmd === 0x80 || (cmd === 0x90 && data[2] === 0)) {
     const note = data[1];
-    if (channel === 10 && note >= 40 && note <= 51) return;
+    // Pad noteOffs for plant-mode pads are no-ops (mode is sticky).
+    const bankA5_8Lo = PAD_NOTE_BANK_A_BASE + 4;
+    const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
+    if (channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankBHi) return;
     noteOff(note);
     return;
   }

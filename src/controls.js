@@ -26,10 +26,7 @@ import { BPM } from './tempo.js';
 import { popupEncoder, popupFader } from './output/minilab3.js';
 import { refreshInspector } from './inspector.js';
 import { liveTimbre, LIVE_ROLE_OCTAVE_SHIFT } from './timbres.js';
-
-// Map an encoder CC to its slot index (0..7).
-const ENCODER_CCS = [86, 87, 89, 90, 110, 111, 116, 117];
-const FADER_CCS = [14, 15, 30, 31];
+import { ENCODER_CCS, FADER_CCS } from './devices/minilab3.js';
 
 function encoderSlot(cc) { return ENCODER_CCS.indexOf(cc); }
 function faderSlot(cc) { return FADER_CCS.indexOf(cc); }
