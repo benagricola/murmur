@@ -32,6 +32,7 @@ export function takeSnapshot(label, immediate = false) {
         pattern: s.pattern.map(p => ({
           offset: p.offset, velocity: p.velocity,
           duration: p.duration,
+          tOffset: p.tOffset,
           extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
         })),
         quantize: s.quantize,

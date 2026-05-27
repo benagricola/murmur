@@ -64,6 +64,10 @@ export function playSeedStep(seed, when) {
   const baseMidi = midiFromFreq(seed.fundamental);
   const baseGain = seed.gain || 0.35;
   const targetMidi = baseMidi + (step.offset || 0);
+  // seed.quantize gates two things: pitch snap-to-scale AND micro-
+  // timing snap to the grid step. tOffset (set at record time) holds
+  // the original off-grid displacement; honour it only when quantize
+  // is off so the user can switch between clean-grid and as-played.
   const finalMidi = seed.quantize ? snapToScale(targetMidi) : targetMidi;
   const freq = freqFromMidi(finalMidi);
   // sustainMs MUST be a number for scheduled notes — undefined makes
@@ -73,7 +77,13 @@ export function playSeedStep(seed, when) {
   // a full step's worth of time and self-terminates cleanly.
   const stepDuration = step.duration !== undefined ? step.duration : 1.0;
   const sustainMs = stepDuration * seed.intervalMs;
-  playNoteAt(seed, when, freq, baseGain * step.velocity, sustainMs);
+  // tOffset is in fractions of a step (range ~[-0.5, +0.5]).
+  // Convert to seconds and add to the fire time. Quantize on = ignore.
+  let fireAt = when;
+  if (!seed.quantize && step.tOffset) {
+    fireAt = when + (step.tOffset * seed.intervalMs) / 1000;
+  }
+  playNoteAt(seed, fireAt, freq, baseGain * step.velocity, sustainMs);
   if (step.extras && step.extras.length > 0) {
     for (const ex of step.extras) {
       const exMidi = baseMidi + (ex.offset || 0);
@@ -81,7 +91,9 @@ export function playSeedStep(seed, when) {
       const exFreq = freqFromMidi(exFinalMidi);
       const exDuration = ex.duration !== undefined ? ex.duration : stepDuration;
       const exSustainMs = exDuration * seed.intervalMs;
-      playNoteAt(seed, when, exFreq, baseGain * (ex.velocity !== undefined ? ex.velocity : step.velocity), exSustainMs);
+      // Chord extras fire at the SAME time as the primary — share fireAt so
+      // an unquantized chord stays coherent.
+      playNoteAt(seed, fireAt, exFreq, baseGain * (ex.velocity !== undefined ? ex.velocity : step.velocity), exSustainMs);
     }
     // Record this chord step for blob visualisation. Only chord steps
     // trigger outlines — single-note steps stay represented by the

@@ -56,6 +56,11 @@ export function makeSeed(opts) {
             velocity: s.velocity !== undefined ? s.velocity : 1.0,
           };
           if (s.duration !== undefined) copy.duration = s.duration;
+          // tOffset: fractional displacement from the grid step
+          // (range ~[-0.5, +0.5]). Recording stores this so the
+          // seed's quantize toggle becomes a real playback choice —
+          // on = snap to grid, off = honour the original micro-timing.
+          if (s.tOffset !== undefined) copy.tOffset = s.tOffset;
           if (s.extras && s.extras.length > 0) {
             copy.extras = s.extras.map(e => ({
               offset: e.offset || 0,

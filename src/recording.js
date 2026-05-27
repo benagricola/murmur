@@ -106,12 +106,22 @@ function phraseFromRecording(buf) {
 
   // Bucket notes by step. Each step keeps an array of unique-pitch
   // notes; if a pitch hits the same step twice, the louder wins.
+  //
+  // We track each note's original timestamp `t` so we can compute the
+  // step's `tOffset` — the fractional displacement from the grid line
+  // (range [-0.5, +0.5] of a step). This preserves the player's
+  // micro-timing even though the pitch / pattern shape is bucketed.
+  // The seed's quantize toggle then decides at PLAYBACK time whether
+  // to honour tOffset (off-grid feel) or ignore it (clean grid).
+  // Recording always stores the offset — playback never loses it.
   const stepBuckets = new Array(totalSteps).fill(null).map(() => []);
   for (const n of notes) {
-    const step = Math.min(totalSteps - 1, Math.round(n.t / stepMs));
+    const exactStep = n.t / stepMs;
+    const step = Math.min(totalSteps - 1, Math.round(exactStep));
+    const tOffset = Math.max(-0.49, Math.min(0.49, exactStep - step));
     const durMs = n.duration !== null && n.duration !== undefined ? n.duration : (stepMs * 0.6);
     const existingIdx = stepBuckets[step].findIndex(x => x.midi === n.midi);
-    const entry = { midi: n.midi, velocity: n.velocity, durMs };
+    const entry = { midi: n.midi, velocity: n.velocity, durMs, tOffset };
     if (existingIdx >= 0) {
       if (stepBuckets[step][existingIdx].velocity < n.velocity) {
         stepBuckets[step][existingIdx] = entry;
@@ -125,6 +135,10 @@ function phraseFromRecording(buf) {
   const toStep = (notes) => {
     if (notes.length === 0) return { offset: 0, velocity: 0, duration: 1.0 };
     notes.sort((a, b) => a.midi - b.midi);
+    // Step-wide tOffset = the loudest (primary) note's offset. Extras
+    // in a chord usually arrive within a few ms of each other, so one
+    // shared value is musically right.
+    const primaryRaw = notes[0];
     const noteToFields = (nn) => {
       const useMidi = state.guardrails ? snapToScale(nn.midi) : nn.midi;
       return {
@@ -133,7 +147,8 @@ function phraseFromRecording(buf) {
         duration: Math.max(0.15, Math.min(8.0, nn.durMs / stepMs)),
       };
     };
-    const primary = noteToFields(notes[0]);
+    const primary = noteToFields(primaryRaw);
+    primary.tOffset = primaryRaw.tOffset || 0;
     if (notes.length > 1) primary.extras = notes.slice(1).map(noteToFields);
     return primary;
   };
