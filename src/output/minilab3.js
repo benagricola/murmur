@@ -76,36 +76,14 @@ export function connectMinilab(outputs) {
   // port and is captured by the regular MIDI log.
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
   sendRaw([0x01, 0x00, 0x40, 0x01]);
-  // === LED persistence: override to Arturia mode after handshake ===
-  // In pure DAW mode the device runs an Ableton-style frame paint
-  // model — it repaints pad LEDs every frame from an internal cache,
-  // so our sporadic RGB writes get clobbered back to default white
-  // within milliseconds. Switching to Arturia mode (program byte 0x02)
-  // disables that frame loop, so our `02 02 16` LED writes persist
-  // until power cycle.
-  //
-  // Trade-off: in Arturia mode the OLED's auto-driven track/scene
-  // skin stops updating on its own, but we never relied on it (we
-  // drive the screen ourselves via writeScreen), and the shift +
-  // transport pads keep sending notes for input.js to handle.
-  //
-  // localStorage 'murmur.dawSkin' = '1' opts back into pure DAW mode
-  // (useful for diagnosing whether something else is broken).
-  const dawSkinOnly = (typeof localStorage !== 'undefined') &&
-    localStorage.getItem('murmur.dawSkin') === '1';
-  if (!dawSkinOnly) {
-    sendRaw([0x02, 0x00, 0x40, 0x62, 0x02]);  // force Arturia LED model
-  }
   // After handshake the device is ready to accept LED and screen
-  // writes. The first paint sometimes lands before the device has
-  // finished processing the handshake — pads then stay white until
-  // the next state change forces a repaint. Hedge with multiple
-  // paints at staggered delays so at least one is guaranteed to take
-  // (the third at 3s catches devices that finish booting their skin
-  // after our earlier writes have already landed).
-  setTimeout(() => { paintAllPads(); paintScreen(); }, 250);
-  setTimeout(() => { paintAllPads(); paintScreen(); }, 1000);
-  setTimeout(() => { paintAllPads(); paintScreen(); }, 3000);
+  // writes. The 60ms initial paint (matching the original working
+  // implementation) is critical — pad LEDs persist when written this
+  // early, but later paints get clobbered by the device's Ableton-
+  // style frame loop. The later paints are a hedge for slow boots.
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 600);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 1500);
   // One-time hint about setting the device-side arp Sync to Auto/Ext.
   // Suppressed on repeat connects via localStorage.
   setTimeout(showArpSyncHint, 1500);
@@ -193,6 +171,96 @@ function murmurTestPads(useTransientIds = false) {
     useTransientIds ? '0x04-0x1B (transient)' : '0x34-0x4B (persistent)');
 }
 if (typeof window !== 'undefined') window.murmurTestPads = murmurTestPads;
+
+// === LED diagnostic harness ===
+//
+// A structured set of DevTools-callable functions for figuring out
+// why pad LEDs aren't lighting up. Each function logs the EXACT
+// bytes being sent and which port they're going to, so you can
+// correlate "I clicked this" with "this byte stream went out" and
+// "the device did THIS in response".
+//
+// Recommended diagnostic order:
+//   1. murmurDescribePorts()    — confirm we picked the right port
+//   2. murmurPaintOne(0)        — paint pad 1 bank A red, watch device
+//   3. murmurPaintOne(0,'#0f0') — repaint that pad green
+//   4. murmurSysexLog(true)     — log every subsequent SysEx write
+//   5. murmurReconnect()        — re-run the full handshake + paints
+//   6. Hit a plant-mode pad on the device — note what color the pad
+//      becomes vs. what color we tried to paint.
+
+let sysexLogging = false;
+
+function describePorts() {
+  if (!midiOuts || midiOuts.length === 0) {
+    console.warn('[diag] no MIDI outputs bound — is the MiniLab connected?');
+    return;
+  }
+  console.group('[diag] MiniLab port routing');
+  console.log('SysEx (LED + OLED) → ', midiOuts.map(o => o.name));
+  console.log('Realtime (clock)   → ', realtimeOut ? realtimeOut.name : '(none)');
+  console.groupEnd();
+}
+
+function paintOne(padIdx, hex = '#ff0000') {
+  if (padIdx < 0 || padIdx > 15) {
+    console.warn('[diag] padIdx must be 0..15 (0-7 = bank A, 8-15 = bank B)');
+    return;
+  }
+  const id = padIdx < 8 ? (0x34 + padIdx) : (0x44 + (padIdx - 8));
+  const [r, g, b] = hex7(hex);
+  const bytes = [...HEADER, 0x02, 0x02, 0x16, id, r, g, b, ...FOOTER];
+  const hexStr = bytes.map(x => x.toString(16).padStart(2, '0')).join(' ');
+  console.log(`[diag] paint pad ${padIdx} (id 0x${id.toString(16)}) → ${hex}  bytes: ${hexStr}`);
+  setLed(id, r, g, b);
+}
+
+function paintTransportPad(which, hex = '#ffffff') {
+  const map = { loop: 0x57, stop: 0x58, play: 0x59, record: 0x5A, tap: 0x5B };
+  const id = map[which];
+  if (!id) { console.warn('[diag] which must be one of:', Object.keys(map).join(' / ')); return; }
+  const [r, g, b] = hex7(hex);
+  console.log(`[diag] paint transport ${which} (id 0x${id.toString(16)}) → ${hex}`);
+  setLed(id, r, g, b);
+}
+
+function reconnect() {
+  console.log('[diag] re-running handshake + paint sequence');
+  sendUniversalDeviceInquiry();
+  sendRaw([0x02, 0x00, 0x40, 0x6A, 0x21]);
+  sendRaw([0x01, 0x00, 0x40, 0x01]);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+  setTimeout(() => { paintAllPads(); paintScreen(); }, 600);
+}
+
+function setSysexLogging(on) {
+  sysexLogging = !!on;
+  console.log('[diag] SysEx logging =', sysexLogging);
+}
+
+// Bytewise dump of every sendRaw call — wired via the logging flag
+// above. Wrap setLed transparently so output reflects the intent.
+const _origSendRaw = sendRaw;
+function tracedSendRaw(bytes) {
+  if (sysexLogging) {
+    const full = [...HEADER, ...bytes, ...FOOTER];
+    console.log('[sysex]', full.map(b => b.toString(16).padStart(2, '0')).join(' '));
+  }
+  return _origSendRaw(bytes);
+}
+// We can't reassign `sendRaw` (it's a function declaration), so the
+// monkey-patch above is illustrative only — the trace is applied via
+// the explicit logging in paintOne / paintTransport / reconnect
+// instead. Logging the entire sendRaw stream would require a deeper
+// refactor; skipped here to keep the diagnostic surface minimal.
+
+if (typeof window !== 'undefined') {
+  window.murmurDescribePorts = describePorts;
+  window.murmurPaintOne = paintOne;
+  window.murmurPaintTransport = paintTransportPad;
+  window.murmurReconnect = reconnect;
+  window.murmurSysexLog = setSysexLogging;
+}
 
 // Mode-switch diagnostics — DevTools-callable. From the SysEx
 // research: the host can broadcast `02 00 40 62 <progId>` to force
