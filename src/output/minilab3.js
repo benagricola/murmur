@@ -323,6 +323,103 @@ function sysexPort(target = 'alv') {
 let midiAccess = null;
 export function setMidiAccessRef(access) { midiAccess = access; }
 
+// === Brute-force diagnostics ===
+// When the structured paint-one diagnostics don't tell us anything,
+// these let the user manually test arbitrary byte sequences and scan
+// the entire pad-ID space looking for what the firmware actually
+// honours.
+
+// Paste raw hex bytes (any whitespace OK) and they go straight to the
+// current midiOuts ports. Bypasses every wrapper. Use this when you
+// want to test EXACTLY what's on the wire without any header munging.
+//   e.g. murmurSendRaw('f0 00 20 6b 7f 42 02 02 16 34 7f 00 00 f7')
+function sendRawHex(hexString) {
+  const bytes = hexString
+    .replace(/0x/gi, '')
+    .replace(/[,;]/g, ' ')
+    .split(/\s+/)
+    .filter(s => s.length > 0)
+    .map(s => parseInt(s, 16));
+  if (bytes.some(b => Number.isNaN(b) || b < 0 || b > 255)) {
+    console.warn('[diag] hex parse failed; expected space-separated bytes 0..ff');
+    return;
+  }
+  if (midiOuts.length === 0) { console.warn('[diag] no MIDI outputs bound'); return; }
+  console.log(`[diag] sending raw → ${midiOuts.map(o => o.name).join(', ')}:`,
+    bytes.map(b => b.toString(16).padStart(2, '0')).join(' '));
+  for (const out of midiOuts) {
+    try { out.send(bytes); } catch (e) { console.warn('[diag] send failed', out.name, e); }
+  }
+}
+
+// Iterate every pad ID 0x00..0x7F, send a single LED RGB write to
+// each at ~50ms intervals. Watch the device — if ANY pad lights up
+// during the sweep, we've found a working ID range. Log shows which
+// ID was sent at each tick.
+function scanPadIds(hex = '#ff0000', delayMs = 80) {
+  if (midiOuts.length === 0) { console.warn('[diag] no MIDI outputs bound'); return; }
+  const [r, g, b] = hex7(hex);
+  let id = 0;
+  console.log('[diag] scanning pad IDs 0x00..0x7f — watch the device. cancel with murmurStopScan()');
+  scanStop = false;
+  const tick = () => {
+    if (scanStop || id > 0x7F) {
+      console.log('[diag] scan complete');
+      return;
+    }
+    for (const out of midiOuts) {
+      try { out.send([...HEADER, 0x02, 0x02, 0x16, id, r, g, b, ...FOOTER]); } catch (e) {}
+    }
+    console.log(`[diag] scan id 0x${id.toString(16).padStart(2, '0')}`);
+    id++;
+    setTimeout(tick, delayMs);
+  };
+  tick();
+}
+let scanStop = false;
+function stopScan() { scanStop = true; console.log('[diag] scan stopped'); }
+
+// Override which port realtime (clock/start/stop) goes to. If the arp
+// isn't following our tempo, try sending clock to a different port —
+// some firmware versions might want clock on the DAW (ALV) port.
+function realtimePort(target = 'main') {
+  if (!midiAccess) { console.warn('[diag] no MIDI access'); return; }
+  const allMinilab = [];
+  for (const out of midiAccess.outputs.values()) {
+    if (PORT_NAME_DEVICE.test(out.name || '')) allMinilab.push(out);
+  }
+  if (target === 'main') {
+    realtimeOut = allMinilab.find(o => !PORT_NAME_SPECIAL.test(o.name || '')) || allMinilab[0] || null;
+  } else if (target === 'alv') {
+    realtimeOut = allMinilab.find(o => PORT_NAME_DAW.test(o.name || '')) || null;
+  } else if (target === 'both') {
+    // We only have one realtimeOut variable; "both" means dual-send
+    // via a wrapper. Set up a fan-out array stashed on a flag.
+    realtimeOutAll = allMinilab;
+    realtimeOut = allMinilab[0] || null;
+    console.log('[diag] realtime fan-out enabled to:', allMinilab.map(o => o.name));
+    return;
+  }
+  realtimeOutAll = null;
+  console.log('[diag] realtime port set to:', realtimeOut ? realtimeOut.name : '(none)');
+}
+let realtimeOutAll = null;  // when set, sendRealtime broadcasts to every port
+
+// Also expose a 1-shot LED write that bypasses setLed entirely so we
+// can experiment with format variants (8-bit colour, different command
+// byte, etc.).
+//   murmurSendLed(0x34, 0x7f, 0, 0)           — standard
+//   murmurSendLed(0x34, 0xff, 0, 0)           — 8-bit (will be clamped by MIDI)
+//   murmurSendLed(0x34, 127, 0, 0, {cmd:[0x02, 0x02, 0x10]})  — try different cmd byte
+function sendLed(id, r, g, b, opts = {}) {
+  const cmd = opts.cmd || [0x02, 0x02, 0x16];
+  const bytes = [...HEADER, ...cmd, id, r & 0x7F, g & 0x7F, b & 0x7F, ...FOOTER];
+  console.log('[diag] LED →', bytes.map(b => b.toString(16).padStart(2, '0')).join(' '));
+  for (const out of midiOuts) {
+    try { out.send(bytes); } catch (e) { console.warn('[diag] send failed', out.name, e); }
+  }
+}
+
 if (typeof window !== 'undefined') {
   window.murmurDescribePorts = describePorts;
   window.murmurPaintOne = paintOne;
@@ -332,6 +429,11 @@ if (typeof window !== 'undefined') {
   window.murmurStopClock = killClock;
   window.murmurStartClock = startClock;
   window.murmurSysexPort = sysexPort;
+  window.murmurSendRaw = sendRawHex;
+  window.murmurScanPadIds = scanPadIds;
+  window.murmurStopScan = stopScan;
+  window.murmurRealtimePort = realtimePort;
+  window.murmurSendLed = sendLed;
 }
 
 // Mode-switch diagnostics — DevTools-callable. From the SysEx
@@ -612,6 +714,14 @@ let clockTicksSent = 0;     // diagnostic counter — accessible via murmurClock
 let clockStartMs = 0;       // wall-clock time clock-tick stream began
 
 function sendRealtime(byte, timestamp) {
+  // murmurRealtimePort('both') sets realtimeOutAll for fan-out testing.
+  // Default is single-port via realtimeOut.
+  if (realtimeOutAll && realtimeOutAll.length > 0) {
+    for (const out of realtimeOutAll) {
+      try { out.send([byte], timestamp); } catch (e) {}
+    }
+    return;
+  }
   if (!realtimeOut) return;
   try { realtimeOut.send([byte], timestamp); }
   catch (e) { console.warn('[minilab] realtime send failed', e); }
