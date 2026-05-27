@@ -146,17 +146,9 @@ export function disengageFader(sliderId) {
 }
 
 function handleEncoderNoSelection(idx, value) {
-  // With nothing selected the encoders steer the live keyboard tone.
-  // Encoder 1: octave shift on top of the per-role default. Range
-  // -3..+3 octaves. The other slots are reserved for future live
-  // params (timbre brightness, layer mix, etc.).
-  if (idx === 0) {
-    const oct = Math.round(ccRange(value, -3, 3));
-    state.liveOctave = oct;
-    const sign = oct > 0 ? '+' : '';
-    popupEncoder(value, 'live oct', sign + oct);
-    return true;
-  }
+  // No-op with nothing selected. Octave shifts are handled by the
+  // device's dedicated Oct+ / Oct- buttons; doubling that on an
+  // encoder duplicates what the hardware already does well.
   return false;
 }
 

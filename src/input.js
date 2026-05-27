@@ -41,12 +41,12 @@ export function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   // DO octave-shift per role so bass sits two octaves below the
   // pressed key while melody stays at pitch — without this, a
   // 25-key controller can't comfortably play bass and melody from
-  // the same key positions. state.liveOctave is a user-driven
-  // offset on top of the role default (encoder 1 when no seed
-  // selected sets it).
-  const roleShift = (LIVE_ROLE_OCTAVE_SHIFT[liveTimbre.role] || 0);
-  const userShift = state.liveOctave || 0;
-  const targetMidi = midi + (roleShift + userShift) * 12;
+  // the same key positions. The user's own octave nudging comes
+  // from the MiniLab's Oct+/Oct- buttons (which change which MIDI
+  // note each key sends), so we don't layer an app-side shift on
+  // top of that.
+  const roleShift = (LIVE_ROLE_OCTAVE_SHIFT[liveTimbre.role] || 0) * 12;
+  const targetMidi = midi + roleShift;
   const freq = freqFromMidi(targetMidi);
   const patch = liveTimbre.patch;
   const handle = playPatch(patch, audioCtx.currentTime, freq, 0.25 * velocity, null, (n) => n.connect(masterGain));
