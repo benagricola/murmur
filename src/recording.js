@@ -90,9 +90,18 @@ function phraseFromRecording(buf) {
   const fundamentalMidi = midis[Math.floor(midis.length / 2)];
   const fundamentalFreq = freqFromMidi(fundamentalMidi);
 
-  const stepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
+  const naturalStepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
   const maxSteps = state.guardrails ? 16 : 32;
-  const totalSpan = Math.max(...notes.map(n => n.t)) + stepMs;
+  const totalSpan = Math.max(...notes.map(n => n.t)) + naturalStepMs;
+  // If the recording is longer than maxSteps × naturalStepMs can
+  // cover, expand the step size to fit. Without this, late notes
+  // (anything past maxSteps × naturalStepMs ms) get jammed into the
+  // final bucket — which is why arp recordings used to end with all
+  // remaining notes piled onto one step. Sacrifice timing resolution
+  // over note-cramming.
+  const stepMs = totalSpan > maxSteps * naturalStepMs
+    ? totalSpan / maxSteps
+    : naturalStepMs;
   const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
 
   // Bucket notes by step. Each step keeps an array of unique-pitch
@@ -113,12 +122,6 @@ function phraseFromRecording(buf) {
   }
   while (stepBuckets.length > 1 && stepBuckets[stepBuckets.length - 1].length === 0) stepBuckets.pop();
 
-  // Cap chord size at 5 notes (root + 4 extras). Without a cap, an
-  // arpeggiator dump or a finger-roll can stuff a single step with
-  // 8+ overlapping notes — the pattern visualisation can't show
-  // that legibly and the resulting sound is mush. 5 covers any
-  // diatonic / extended chord.
-  const MAX_CHORD_NOTES = 5;
   const toStep = (notes) => {
     if (notes.length === 0) return { offset: 0, velocity: 0, duration: 1.0 };
     notes.sort((a, b) => a.midi - b.midi);
@@ -131,9 +134,7 @@ function phraseFromRecording(buf) {
       };
     };
     const primary = noteToFields(notes[0]);
-    if (notes.length > 1) {
-      primary.extras = notes.slice(1, MAX_CHORD_NOTES).map(noteToFields);
-    }
+    if (notes.length > 1) primary.extras = notes.slice(1).map(noteToFields);
     return primary;
   };
 
