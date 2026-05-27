@@ -51,13 +51,15 @@ export function connectMinilab(outputs) {
   else if (allMinilab.length > 0) midiOuts = allMinilab;
   else if (outputs && outputs.length > 0) midiOuts = [outputs[0]];
   else midiOuts = [];
-  // Realtime port: the main "Minilab3:Minilab3 MIDI" port — i.e. NOT
-  // any of the special-purpose ports (ALV / MCU / DIN-THRU). Falls
-  // back to the first MiniLab output if the name match misses.
-  realtimeOut = allMinilab.find(o => {
-    const n = (o.name || '').toLowerCase();
-    return n.includes('midi') && !/alv|mcu|hui|din|thru|midiin2|daw/.test(n);
-  }) || allMinilab[0] || null;
+  // Realtime port: the main keyboard/notes/clock port. We pick by
+  // *exclusion* — any MiniLab port that ISN'T one of the named
+  // special-purpose ports (ALV / MCU / HUI / DIN THRU / MIDIIN2 / DAW).
+  // The previous implementation also required the literal word "midi"
+  // to appear in the name, which excluded Windows naming conventions
+  // ("MINILAB3" with no "MIDI" suffix). Exclude-only is more portable.
+  const SPECIAL_PORT_RE = /\b(alv|mcu|hui|din[ _-]?thru|thru|midiin2|daw)\b/i;
+  realtimeOut = allMinilab.find(o => !SPECIAL_PORT_RE.test(o.name || ''))
+    || allMinilab[0] || null;
   if (midiOuts.length === 0) return false;
   console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name),
     dawPort ? '(DAW port matched)' : '(no DAW port found, spraying all)');
@@ -81,6 +83,9 @@ export function connectMinilab(outputs) {
   // at staggered delays so at least one is guaranteed to take.
   setTimeout(() => { paintAllPads(); paintScreen(); }, 250);
   setTimeout(() => { paintAllPads(); paintScreen(); }, 1000);
+  // One-time hint about setting the device-side arp Sync to Auto/Ext.
+  // Suppressed on repeat connects via localStorage.
+  setTimeout(showArpSyncHint, 1500);
   return true;
 }
 
@@ -433,6 +438,8 @@ export function realignEncoder(encSysId, value7bit) {
 
 let clockTimer = null;
 let clockNextTickMs = 0;
+let clockTicksSent = 0;     // diagnostic counter — accessible via murmurClockStatus()
+let clockStartMs = 0;       // wall-clock time of last Start
 
 function sendRealtime(byte, timestamp) {
   if (!realtimeOut) return;
@@ -445,6 +452,8 @@ export function startClockOut() {
   // 0xFA = Start. Tells the MiniLab arp to (re)start from step 1.
   sendRealtime(0xFA);
   clockNextTickMs = performance.now();
+  clockTicksSent = 0;
+  clockStartMs = performance.now();
   if (clockTimer) clearInterval(clockTimer);
   clockTimer = setInterval(scheduleClockAhead, 25);
 }
@@ -466,5 +475,70 @@ function scheduleClockAhead() {
   while (clockNextTickMs < horizon) {
     sendRealtime(0xF8, clockNextTickMs);
     clockNextTickMs += tickMs;
+    clockTicksSent++;
   }
+}
+
+// DevTools diagnostic: confirms that we're (a) routed to a port that
+// looks right, (b) actively pumping clock ticks at the expected rate.
+// If the user's arp still doesn't follow, the device's Sync setting
+// is on Internal — see showArpSyncHint() below.
+function murmurClockStatus() {
+  const port = realtimeOut ? realtimeOut.name : '(none)';
+  const running = !!clockTimer;
+  const elapsedMs = clockStartMs ? performance.now() - clockStartMs : 0;
+  const expectedTicks = Math.round(elapsedMs / (60000 / BPM / 24));
+  return {
+    realtimePort: port,
+    sysExPort: midiOuts.map(o => o.name),
+    clockRunning: running,
+    bpm: BPM,
+    ticksSent: clockTicksSent,
+    expectedTicks,
+    elapsedMs: Math.round(elapsedMs),
+  };
+}
+if (typeof window !== 'undefined') {
+  window.murmurClockStatus = () => {
+    const s = murmurClockStatus();
+    console.table(s);
+    return s;
+  };
+}
+
+// === First-connect hint: device-side arp sync source ===
+//
+// The MiniLab 3's arpeggiator has its own Sync setting (Int / Ext /
+// Auto) edited only on the device (Shift + long-press Pad 1, then
+// main encoder). With Int (the factory default before fw 1.1.1) it
+// ignores incoming MIDI Clock, so murmur's 0xF8 stream has no
+// audible effect on the arp. There is no SysEx command to change
+// this — confirmed by exhaustive search of community SysEx docs and
+// the Arturia MCC manual, which exposes templates but not arp/sync
+// parameters.
+//
+// Show a one-time inline toast the first time the device connects in
+// a browser. localStorage suppresses repeats.
+function showArpSyncHint() {
+  if (typeof window === 'undefined') return;
+  if (localStorage.getItem('murmur.arpSyncHintShown') === '1') return;
+  const el = document.createElement('div');
+  el.className = 'arp-sync-hint';
+  el.innerHTML = `
+    <strong>Sync the MiniLab arp to murmur</strong>
+    <p>On the device: hold <kbd>Shift</kbd> + long-press <kbd>Pad 1</kbd>,
+       scroll the main encoder to <code>Sync</code>, then set it to
+       <code>Auto</code> (or <code>Ext</code>). Without that the device's arp
+       runs on its own clock and ignores murmur's tempo.</p>
+    <button class="arp-sync-hint-close">got it</button>
+  `;
+  document.body.appendChild(el);
+  el.querySelector('button').addEventListener('click', () => {
+    localStorage.setItem('murmur.arpSyncHintShown', '1');
+    el.remove();
+  });
+}
+if (typeof window !== 'undefined') {
+  // Re-show on demand for debugging — wipe the flag and call again.
+  window.murmurShowArpHint = () => { localStorage.removeItem('murmur.arpSyncHintShown'); showArpSyncHint(); };
 }

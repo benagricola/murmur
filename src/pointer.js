@@ -6,9 +6,7 @@
 // (timbre role picker) since both are part of the "what am I planting"
 // surface.
 
-import {
-  RHYTHM_OPTIONS, SPHERE_OPTIONS, nearestOptionIdx,
-} from './constants.js';
+import { SPHERE_OPTIONS } from './constants.js';
 import { BEAT_MS, BAR_MS } from './tempo.js';
 import {
   TIMBRE_ROLES, activeRole, setActiveRole,
@@ -130,27 +128,66 @@ function finalizeTaps() {
   const role = TIMBRE_ROLES[activeRole] || TIMBRE_ROLES.melody;
   const gen = role.generate();
 
-  // Rhythm from tap intervals if 2+ taps, otherwise role default
-  let intervalMs = gen.intervalMs;
-  if (taps.length >= 2) {
-    let total = 0;
-    for (let i = 1; i < taps.length; i++) total += taps[i].ts - taps[i - 1].ts;
-    intervalMs = total / (taps.length - 1);
-    intervalMs = RHYTHM_OPTIONS[nearestOptionIdx(RHYTHM_OPTIONS, intervalMs)].ms;
-  }
-
-  // Pitch from Y position, biased into role's natural range. Top of
-  // canvas = +1 octave, bottom = -1 octave from the role's default.
+  // Pitch from first tap's Y position, biased into role's natural
+  // range. Top of canvas = +1 octave, bottom = -1 octave from the
+  // role's default.
   const yNorm = Math.max(0, Math.min(1, tapBuffer.firstY / 800));
   const fundamental = gen.fundamentalHz * Math.pow(2, (0.5 - yNorm) * 1.6);
 
-  // Pattern from tap Y positions (relative to first tap).
+  // === Pattern from tap timing on a quantized grid ===
+  //
+  // Old behaviour built one pattern entry per tap and used the average
+  // inter-tap interval as `intervalMs`. That collapsed any pause
+  // between taps — "tap [pause] tap tap tap tap" played back as five
+  // evenly-spaced taps. The user's relative timing was lost.
+  //
+  // New behaviour: bucket each tap into a fixed-step grid (1/16 notes
+  // when guardrails are on, 1/32 when off) so gaps become explicit
+  // velocity-0 rest steps. The seed's intervalMs becomes the step
+  // size, not the inter-tap average.
   const PIXELS_PER_SEMITONE = 18;
-  const pattern = taps.map((t) => {
+  const offsetOf = (t) => {
     const dy = tapBuffer.firstY - t.y;
-    const offset = Math.round(dy / PIXELS_PER_SEMITONE);
-    return { offset: Math.max(-14, Math.min(14, offset)), velocity: 1.0 };
-  });
+    return Math.max(-14, Math.min(14, Math.round(dy / PIXELS_PER_SEMITONE)));
+  };
+  let pattern, intervalMs;
+  if (taps.length === 1) {
+    intervalMs = gen.intervalMs;
+    pattern = [{ offset: offsetOf(taps[0]), velocity: 1.0 }];
+  } else {
+    // Step size: BAR_MS/16 with guardrails (one 16th-note), BAR_MS/32
+    // without (a 32nd note — finer, more faithful to ad-hoc rhythms).
+    const stepMs = state.guardrails ? BAR_MS / 16 : BAR_MS / 32;
+    const t0 = taps[0].ts;
+    const lastT = taps[taps.length - 1].ts - t0;
+    // Cap the loop length at 4 bars so a long stream of taps doesn't
+    // produce a 200-step pattern. If the user taps for longer than 4
+    // bars, the latter taps wrap into the start.
+    const MAX_STEPS = state.guardrails ? 64 : 128;
+    const totalSteps = Math.max(
+      taps.length,
+      Math.min(MAX_STEPS, Math.ceil(lastT / stepMs) + 1));
+    const buckets = new Array(totalSteps).fill(null);
+    for (const t of taps) {
+      const rel = t.ts - t0;
+      let idx = Math.round(rel / stepMs);
+      // If the rounded slot is already taken, nudge to the nearest
+      // free slot so consecutive fast taps don't collapse onto one
+      // step.
+      let dir = 1;
+      while (buckets[idx] && idx >= 0 && idx < totalSteps) {
+        idx += dir;
+        if (idx < 0 || idx >= totalSteps) { dir = -dir; idx += dir; break; }
+      }
+      if (idx < 0) idx = 0;
+      if (idx >= totalSteps) idx = totalSteps - 1;
+      buckets[idx] = t;
+    }
+    intervalMs = stepMs;
+    pattern = buckets.map((t) => t
+      ? { offset: offsetOf(t), velocity: 1.0 }
+      : { offset: 0, velocity: 0 });
+  }
 
   const r = radiusForFundamental(fundamental);
   const labels = ['little wisp', 'soft hum', 'echo bone', 'spark', 'glimmer', 'small stone', 'feather', 'dapple', 'flicker', 'reed'];

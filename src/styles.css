@@ -913,3 +913,62 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
   15%      { opacity: 0.4; }
   100%     { opacity: 0; transform: translate(var(--gx, 14px), var(--gy, 6px)) scale(0.78); }
 }
+
+/* === First-connect hint about the MiniLab 3's arp Sync setting. ===
+   Pops near the top after a successful device connect. Dismissed via
+   the close button; flag persists in localStorage so subsequent loads
+   stay quiet. */
+.arp-sync-hint {
+  position: fixed;
+  top: 64px;
+  right: 18px;
+  max-width: 340px;
+  padding: 14px 16px 12px;
+  background: rgba(20, 24, 32, 0.96);
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 8px;
+  color: var(--ink, #e8e8e8);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  animation: arp-hint-in 240ms ease-out;
+}
+.arp-sync-hint strong {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(255, 209, 102, 0.95);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.arp-sync-hint p { margin: 0 0 10px; }
+.arp-sync-hint kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10px;
+}
+.arp-sync-hint code {
+  color: rgba(95, 210, 232, 0.95);
+  background: none;
+}
+.arp-sync-hint-close {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--ink, #e8e8e8);
+  font-family: inherit;
+  font-size: 10px;
+  padding: 4px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.arp-sync-hint-close:hover { background: rgba(255, 255, 255, 0.06); }
+@keyframes arp-hint-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
