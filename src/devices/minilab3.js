@@ -58,10 +58,10 @@ export const TRANSPORT_CC = {
 // CC 27 is just the shift modifier state echoed by the device — log
 // it for visibility but never act on it.
 export const TRANSPORT_UNMAPPED_CCS = new Set([27]);
-// Some transport CCs send values other than 127 (e.g. tap-tempo
-// sends 17 on the user's device). Lower threshold so the rising
-// edge still triggers.
-export const TRANSPORT_RISING_THRESHOLD = 8;
+// Transport buttons are momentary — any non-zero value is a press
+// (velocity may vary based on how hard the pad is hit), zero is the
+// release. Trigger threshold is just "non-zero from zero".
+export const TRANSPORT_RISING_THRESHOLD = 1;
 
 // 8 panel encoders, slot 0..7, all absolute 0..127 in the user's
 // template. CC numbers are device-defaults — re-confirmed from a real
