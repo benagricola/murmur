@@ -104,31 +104,60 @@ function phraseFromRecording(buf) {
     : naturalStepMs;
   const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
 
-  // Bucket notes by step. Each step keeps an array of unique-pitch
-  // notes; if a pitch hits the same step twice, the louder wins.
+  // Bucket notes by step + chord-cluster within step.
   //
-  // We track each note's original timestamp `t` so we can compute the
-  // step's `tOffset` — the fractional displacement from the grid line
-  // (range [-0.5, +0.5] of a step). This preserves the player's
-  // micro-timing even though the pitch / pattern shape is bucketed.
-  // The seed's quantize toggle then decides at PLAYBACK time whether
-  // to honour tOffset (off-grid feel) or ignore it (clean grid).
-  // Recording always stores the offset — playback never loses it.
+  // The grid step is the rhythmic position (BAR_MS/16 or /32). Two
+  // notes land in the same step if their timestamps round to the
+  // same grid line — but that's a coarse window (62-125 ms at 120
+  // BPM), wide enough that genuinely separate notes were being
+  // merged into accidental chords.
+  //
+  // Chord detection now uses a tight time window (CHORD_WINDOW_MS,
+  // ~35 ms) — roughly the threshold of human-perceived simultaneity.
+  // Notes within that window of the step's existing primary become
+  // chord extras; notes outside it get nudged to the next free step.
+  //
+  // Each bucket entry carries its original timestamp `t` so we can
+  // compute tOffset (the fractional displacement from the grid line,
+  // [-0.5, +0.5]). The seed's quantize toggle decides at PLAYBACK
+  // time whether to honour tOffset or snap clean to grid.
+  const CHORD_WINDOW_MS = 35;
   const stepBuckets = new Array(totalSteps).fill(null).map(() => []);
   for (const n of notes) {
-    const exactStep = n.t / stepMs;
-    const step = Math.min(totalSteps - 1, Math.round(exactStep));
-    const tOffset = Math.max(-0.49, Math.min(0.49, exactStep - step));
     const durMs = n.duration !== null && n.duration !== undefined ? n.duration : (stepMs * 0.6);
-    const existingIdx = stepBuckets[step].findIndex(x => x.midi === n.midi);
-    const entry = { midi: n.midi, velocity: n.velocity, durMs, tOffset };
-    if (existingIdx >= 0) {
-      if (stepBuckets[step][existingIdx].velocity < n.velocity) {
-        stepBuckets[step][existingIdx] = entry;
+    // Walk forward from the desired step looking for either an
+    // empty bucket OR a bucket whose primary is within the chord
+    // window of this note.
+    let step = Math.min(totalSteps - 1, Math.round(n.t / stepMs));
+    while (step < totalSteps) {
+      const bucket = stepBuckets[step];
+      if (bucket.length === 0) {
+        const exactStep = n.t / stepMs;
+        const tOffset = Math.max(-0.49, Math.min(0.49, exactStep - step));
+        bucket.push({ midi: n.midi, velocity: n.velocity, durMs, tOffset, t: n.t });
+        break;
       }
-    } else {
-      stepBuckets[step].push(entry);
+      const primary = bucket[0];
+      const dt = Math.abs(primary.t - n.t);
+      if (dt < CHORD_WINDOW_MS) {
+        // True chord — within human-simultaneity window. Add as
+        // extra unless the same midi is already in the cluster, in
+        // which case keep the louder velocity.
+        const existingIdx = bucket.findIndex(x => x.midi === n.midi);
+        if (existingIdx >= 0) {
+          if (bucket[existingIdx].velocity < n.velocity) {
+            bucket[existingIdx] = { midi: n.midi, velocity: n.velocity, durMs, tOffset: bucket[existingIdx].tOffset, t: bucket[existingIdx].t };
+          }
+        } else {
+          bucket.push({ midi: n.midi, velocity: n.velocity, durMs, tOffset: primary.tOffset, t: n.t });
+        }
+        break;
+      }
+      // Same step, but outside the chord window — nudge to next.
+      step++;
     }
+    // If we walked off the end, the note's lost. Acceptable for
+    // very long recordings; loop length is capped at totalSteps.
   }
   while (stepBuckets.length > 1 && stepBuckets[stepBuckets.length - 1].length === 0) stepBuckets.pop();
 
