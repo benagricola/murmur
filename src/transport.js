@@ -213,6 +213,47 @@ onContextCreated(() => {
 // work at the display refresh rate.
 let pendingBpm = null;
 let bpmRaf = 0;
+// === Tab-throttle / visibility resilience ===
+// When the user backgrounds the tab, setInterval gets throttled to
+// ~1Hz and AudioContext.currentTime may or may not keep advancing
+// depending on browser policy. When they return, we can find ourselves
+// in two awkward states:
+//   1. audioCtx is suspended (browser killed it) → must resume before
+//      anything plays.
+//   2. audioCtx is running but the scheduler missed minutes of fire
+//      times → would burst-fire hundreds of past-due notes catching up.
+//
+// Stage 3's per-step "skip if more than 1s in the past" already
+// catches case 2 without bursting, but iterating through thousands
+// of skipped steps takes time. Re-anchoring playbackStartTime on
+// visibility-return is faster and cleaner.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!audioCtx) return;
+  // Resume if the browser suspended us.
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  // If we've been hidden long enough that the scheduler fell behind
+  // by more than ~2 bars worth of beats, re-anchor playbackStartTime
+  // to the current time. The master beat clock formula then gives
+  // sane fire times immediately, with no burst of past-due notes.
+  if (state.isPlaying && state.playbackStartTime) {
+    const since = audioCtx.currentTime - state.playbackStartTime;
+    const twoBars = (BAR_MS / 1000) * 2;
+    // `since` can be negative if currentTime didn't advance during
+    // the hide; treat that as "fine, no re-anchor needed".
+    if (since > twoBars && since > 8) {  // > 2 bars AND > 8s — defensive
+      state.playbackStartTime = audioCtx.currentTime + 0.04;
+      for (const s of seeds) {
+        s.patternIdx = 0;
+        s.nextTrigger = 0;
+      }
+      console.log('[visibility] re-anchored playback after long background gap');
+    }
+  }
+});
+
 document.getElementById('tempo-slider').addEventListener('input', (e) => {
   pendingBpm = parseInt(e.target.value);
   disengageFader('tempo-slider');
