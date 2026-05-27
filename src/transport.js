@@ -183,6 +183,8 @@ playBtn.addEventListener('click', async () => {
     for (const s of seeds) {
       s.nextTrigger = 0; s.patternIdx = 0;
     }
+    // Tell beat-synced helpers (metronome, etc.) to re-anchor.
+    window.dispatchEvent(new CustomEvent('play-anchor-changed'));
     showAudioStatus(ctx.state + ' · playing' + (supportsPeriodicWave ? '' : ' · basic'),
                     ctx.state === 'running' ? 'ok' : '');
     startClockOut();  // sync the MiniLab arpeggiator to murmur's tempo

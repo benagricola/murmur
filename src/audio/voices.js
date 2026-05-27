@@ -531,6 +531,27 @@ function registerNote(entry) {
   return entry;
 }
 
+// Force-stop every active note whose `tag` matches the given value.
+// Used by removeSeed to silence a deleted seed's in-flight audio
+// instantly instead of letting it ring out its release tail.
+export function forceStopByTag(tag) {
+  if (tag === undefined || tag === null) return 0;
+  let n = 0;
+  for (const entry of activeNotes) {
+    if (entry.tag !== tag) continue;
+    try { if (entry.output) entry.output.disconnect(); } catch (e) {}
+    try {
+      if (entry.voices) {
+        const now = audioCtx ? audioCtx.currentTime : 0;
+        for (const v of entry.voices) { try { v.stop(now); } catch (e) {} }
+      }
+    } catch (e) {}
+    activeNotes.delete(entry);
+    n++;
+  }
+  return n;
+}
+
 if (typeof setInterval !== 'undefined') {
   setInterval(() => {
     if (!audioCtx) return;
@@ -575,7 +596,10 @@ if (typeof window !== 'undefined') {
   };
 }
 
-export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
+// `tag` (optional) is an opaque marker the caller can attach to each
+// note. Used by removeSeed to find and force-stop a deleted seed's
+// in-flight audio — tag = seed.id.
+export function playPatch(patch, when, freq, gain, sustainMs, routeFn, tag) {
   if (!audioCtx) return null;
   if (!patch || !patch.layers || patch.layers.length === 0) {
     patch = { layers: [{ voice: 'additive', gain: 1, params: {} }] };
@@ -625,6 +649,7 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
       expectedStopTime: stopAt + 0.5,    // drum tail
       output: env,
       voices,
+      tag,
     });
     return {
       release: () => { activeNotes.delete(entry); },
@@ -649,6 +674,7 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
       expectedStopTime: when + a + sustainSec + r + 0.05,
       output: env,
       voices,
+      tag,
     });
     return {
       release: () => { activeNotes.delete(entry); },
@@ -686,6 +712,7 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     expectedStopTime: audioCtx.currentTime + LIVE_NOTE_MAX_LIFETIME_SEC,
     output: env,
     voices,
+    tag,
   });
 
   return {

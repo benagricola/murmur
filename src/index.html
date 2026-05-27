@@ -27,6 +27,7 @@
       </div>
       <div class="vol-wrap"><span>vol</span><span class="soft-wrap"><input type="range" class="std" id="vol" min="0" max="100" value="35"><span class="soft-marker" id="vol-soft-marker"></span></span></div>
       <div class="vol-wrap"><span>tempo</span><span class="soft-wrap"><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span class="soft-marker" id="tempo-soft-marker"></span></span><span id="tempo-val">120 bpm</span></div>
+      <button class="btn" id="metro-btn" title="Click track (metronome) — toggles a click on every beat while playing">🔔 click</button>
       <button class="btn" id="snap-btn">📷</button>
       <button class="btn" id="demo-btn" title="Roll a new demo composition (techno / dnb / dub)">🎲 demo</button>
       <button class="btn" id="clear-btn" title="Clear canvas (a snapshot is taken first so you can revert)">clear</button>
@@ -138,6 +139,11 @@
     <div class="toggle-row" id="mute-row">
       <div class="toggle" id="mute-toggle"></div>
       <span>muted</span>
+    </div>
+
+    <div class="toggle-row" id="loop-row">
+      <div class="toggle" id="loop-toggle"></div>
+      <span>loop pattern</span>
     </div>
 
     <div class="section" id="harmonic-section">

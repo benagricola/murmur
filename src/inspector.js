@@ -249,6 +249,13 @@ export function selectSeed(id) {
   } else {
     mRow.style.display = 'none';
   }
+  const lRow = document.getElementById('loop-row');
+  if (seed.kind === 'voice') {
+    lRow.style.display = '';
+    document.getElementById('loop-toggle').classList.toggle('on', seed.loop !== false);
+  } else {
+    lRow.style.display = 'none';
+  }
   document.getElementById('harmonic-section').style.display = seed.kind === 'voice' ? '' : 'none';
   document.getElementById('pattern-section').style.display = seed.kind === 'voice' ? '' : 'none';
   if (seed.kind === 'voice') {
@@ -581,6 +588,18 @@ document.getElementById('mute-toggle').addEventListener('click', () => {
   document.getElementById('mute-toggle').classList.toggle('on', !!s.muted);
   renderSeed(s);
   takeSnapshotFn(s.muted ? 'muted' : 'unmuted');
+});
+
+document.getElementById('loop-toggle').addEventListener('click', () => {
+  const s = seedById(state.selectedSeedId);
+  if (!s) return;
+  s.loop = !(s.loop !== false);   // default true; toggle to false
+  document.getElementById('loop-toggle').classList.toggle('on', s.loop !== false);
+  // If we just turned looping back ON, reset patternIdx so the seed
+  // re-engages from the start on the next scheduling pass. If we
+  // turned it OFF, leave patternIdx alone — current loop completes.
+  if (s.loop) s.patternIdx = 0;
+  takeSnapshotFn(s.loop ? 'loop on' : 'loop off');
 });
 
 document.getElementById('regen-btn').addEventListener('click', async () => {

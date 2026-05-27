@@ -16,6 +16,7 @@ import {
 import { BEAT_MS, BAR_MS } from './tempo.js';
 import { TIMBRE_ROLES } from './timbres.js';
 import { setupModifierChain } from './audio/chains.js';
+import { forceStopByTag } from './audio/voices.js';
 import { NUM_HARMONICS } from './audio/context.js';
 import { seeds, seedById, state } from './state.js';
 
@@ -113,6 +114,12 @@ export function makeSeed(opts) {
     nextTrigger: 0,
     lastPulseAt: 0,
     quantize: opts.quantize !== undefined ? opts.quantize : true,
+    // loop: when true (default), the pattern repeats indefinitely
+    // during playback. When false the pattern plays through exactly
+    // once on each play-start (or trigger), then stays silent until
+    // the next trigger. Foundation for the future "trigger seeds
+    // via bloom / wind" feature.
+    loop: opts.loop !== undefined ? opts.loop : true,
     capturedByIds: new Set(),
     capturedSeedIds: new Set(),
     sphereR: opts.sphereR || 0,
@@ -152,7 +159,15 @@ export function makeSeed(opts) {
 export function removeSeed(id) {
   const seed = seedById(id);
   if (!seed) return;
+  // Silence any in-flight audio from this seed immediately. Without
+  // this, scheduled notes already in the Web Audio queue would play
+  // out their full envelope after the seed is gone.
+  forceStopByTag(id);
+  // Disconnect modifier audio chains owned by this seed (delay/reverb
+  // inputs) so their tails go silent rather than ringing into masterGain.
   if (seed.kind === 'modifier') {
+    if (seed.delayInput)  { try { seed.delayInput.disconnect();  } catch (e) {} }
+    if (seed.reverbInput) { try { seed.reverbInput.disconnect(); } catch (e) {} }
     for (const vid of seed.capturedSeedIds) {
       const v = seedById(vid);
       if (v) v.capturedByIds.delete(id);

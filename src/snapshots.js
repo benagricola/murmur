@@ -40,6 +40,7 @@ export function takeSnapshot(label, immediate = false) {
           extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
         })),
         quantize: s.quantize,
+        loop: s.loop,
         capturedByIds: [...(s.capturedByIds || [])],
         capturedSeedIds: [...s.capturedSeedIds],
         sphereR: s.sphereR,

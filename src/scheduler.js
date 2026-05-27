@@ -48,7 +48,9 @@ export function playNoteAt(seed, when, freq, gain, sustainMs, patchOverride) {
       seed._cachedPatch = patch;
     }
   }
-  playPatch(patch, when, freq, gain, sustainMs, (n) => routeFinalOutput(seed, n));
+  // tag = seed.id so removeSeed can force-stop all in-flight audio
+  // from a deleted seed instead of letting envelopes ring out.
+  playPatch(patch, when, freq, gain, sustainMs, (n) => routeFinalOutput(seed, n), seed.id);
   seed.lastPulseAt = when;
 }
 
@@ -207,7 +209,13 @@ export function scheduleAhead() {
     // Schedule every step whose fire time falls inside our lookahead
     // window. fireTime is derived fresh from patternIdx each loop —
     // no incremental accumulation, no drift.
+    //
+    // Non-looping seeds (seed.loop === false) play through their
+    // pattern exactly once per play-start, then stay silent. The
+    // play-button handler in transport.js resets patternIdx to 0 on
+    // every play, so each press re-triggers the one-shot.
     while (true) {
+      if (seed.loop === false && seed.patternIdx >= seed.pattern.length) break;
       const fireTime = state.playbackStartTime + stepFireOffset(seed.patternIdx, baseInterval, swing);
       if (fireTime >= now + lookahead) {
         seed.nextTrigger = fireTime;  // kept for diagnostic / catch-up logic
