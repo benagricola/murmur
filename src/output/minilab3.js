@@ -12,6 +12,7 @@
 // `disconnectMinilab()`.
 
 import { state, seeds, seedById } from '../state.js';
+import { logOut } from '../midi-log-panel.js';
 import { TIMBRE_ROLES, activeRole } from '../timbres.js';
 import { BPM } from '../tempo.js';
 import { noteName, freqFromMidi, midiFromFreq } from '../constants.js';
@@ -125,7 +126,7 @@ function sendRaw(bytes) {
   if (midiOuts.length === 0) return;
   const msg = [...HEADER, ...bytes, ...FOOTER];
   for (const out of midiOuts) {
-    try { out.send(msg); } catch (e) {
+    try { out.send(msg); logOut(msg, out.name); } catch (e) {
       console.warn('[minilab] sysex send failed', out.name, e);
     }
   }
@@ -718,12 +719,12 @@ function sendRealtime(byte, timestamp) {
   // Default is single-port via realtimeOut.
   if (realtimeOutAll && realtimeOutAll.length > 0) {
     for (const out of realtimeOutAll) {
-      try { out.send([byte], timestamp); } catch (e) {}
+      try { out.send([byte], timestamp); logOut([byte], out.name); } catch (e) {}
     }
     return;
   }
   if (!realtimeOut) return;
-  try { realtimeOut.send([byte], timestamp); }
+  try { realtimeOut.send([byte], timestamp); logOut([byte], realtimeOut.name); }
   catch (e) { console.warn('[minilab] realtime send failed', e); }
 }
 

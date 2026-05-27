@@ -25,6 +25,7 @@ import { handleControlCC } from './controls.js';
 import {
   connectMinilab, paintScreen, refreshPadLights, setMidiAccessRef,
 } from './output/minilab3.js';
+import { logIn } from './midi-log-panel.js';
 
 // Lazy hook for setPlantMode (lives in pointer.js). pointer.js
 // registers itself on load — avoids importing pointer.js here and
@@ -190,9 +191,12 @@ function midiCmdName(status) {
 function logMIDI(evt, portName) {
   const bytes = Array.from(evt.data);
   const status = bytes[0] || 0;
+  // Live panel sees every byte — it does its own filtering at the UI
+  // layer so the user can flip clock/sense visibility on demand.
+  logIn(bytes, portName);
   // MIDI Clock (0xF8) fires 24× per beat — at 120 BPM that's 48/sec,
   // and our 8000-entry ring buffer would fill in ~3 minutes of clock
-  // traffic alone. Skip from log unless verbose is on for debugging.
+  // traffic alone. Skip from JSON log unless verbose is on.
   if (status === 0xF8 && !midiVerbose) return;
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
