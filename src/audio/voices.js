@@ -222,11 +222,19 @@ VOICES.hihat = function(audioCtx, freq, when, params) {
 // envelope, hands the result to the routing function. Returns a handle
 // with `release(when)` for the open-ended live case and `detune(cents)`
 // for pitch-bend updates.
+// Set window.murmurAudioDebug = true in DevTools to log every
+// playPatch call (which mode it ran, sustain, layer count) — useful
+// when audio is sticking or behaving unexpectedly.
+function audioDebugEnabled() {
+  return typeof window !== 'undefined' && window.murmurAudioDebug;
+}
+
 export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
   if (!audioCtx) return null;
   if (!patch || !patch.layers || patch.layers.length === 0) {
     patch = { layers: [{ voice: 'additive', gain: 1, params: {} }] };
   }
+  const debug = audioDebugEnabled();
   const summer = audioCtx.createGain();
   const env = audioCtx.createGain();
   summer.connect(env);
@@ -256,6 +264,7 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     env.gain.value = gain;
     const stopAt = when + (sustainMs ? sustainMs / 1000 : 0.5);
     for (const v of voices) v.stop(stopAt + 0.1);
+    if (debug) console.log('[playPatch] one-shot', { layers: voices.length, sustainMs, stopAt: stopAt - when });
     return {
       release: () => {},
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
@@ -270,32 +279,54 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     if (sustainSec > 0) env.gain.setValueAtTime(gain, when + a + sustainSec);
     env.gain.linearRampToValueAtTime(0, when + a + sustainSec + r);
     for (const v of voices) v.stop(when + a + sustainSec + r + 0.05);
+    if (debug) console.log('[playPatch] scheduled', { layers: voices.length, sustainMs, attack: a*1000, release: r*1000, totalMs: (a+sustainSec+r)*1000 });
     return {
       release: () => {},
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
       output: env,
     };
   }
+  if (debug) console.log('[playPatch] LIVE mode (no sustainMs) — caller must invoke release()', { layers: voices.length });
 
   // Live mode: attack then sustain indefinitely; caller invokes release()
   env.gain.setValueAtTime(0, when);
   env.gain.linearRampToValueAtTime(gain, when + a);
+
+  // OscillatorNode.stop() is documented as "if called previously,
+  // has no effect" — so the FIRST call to stop wins. Guard with a
+  // flag so the safety-net timer doesn't pre-empt a legitimate
+  // release call.
+  let stopFired = false;
+  const tryStop = (at) => {
+    if (stopFired) return;
+    stopFired = true;
+    for (const v of voices) {
+      try { v.stop(at); } catch (e) {}
+    }
+  };
+
+  // Safety net: even if the caller forgets to call release (or there's
+  // a bug upstream), force-stop every voice after 30 seconds. No
+  // legitimate live-keyboard note should be held that long, and the
+  // alternative is oscillators that linger forever.
+  const SAFETY_STOP_SECONDS = 30;
+  const safetyTimer = setTimeout(() => {
+    if (!stopFired) {
+      console.warn('[playPatch] safety-net stop firing after 30s — release() was never called');
+      tryStop(audioCtx.currentTime + 0.05);
+    }
+  }, SAFETY_STOP_SECONDS * 1000);
+
   return {
     release: (whenRelease) => {
-      // Each step is independently best-effort. The old single
-      // try/catch would skip the voice.stop() calls if the envelope
-      // manipulation threw — leaving oscillators running forever. We
-      // ALWAYS schedule the stops, even if envelope shaping fails.
+      clearTimeout(safetyTimer);
       const g = env.gain;
       try {
         if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(whenRelease);
         else { g.cancelScheduledValues(whenRelease); g.setValueAtTime(g.value, whenRelease); }
       } catch (e) {}
       try { g.linearRampToValueAtTime(0, whenRelease + r); } catch (e) {}
-      const stopAt = whenRelease + r + 0.05;
-      for (const v of voices) {
-        try { v.stop(stopAt); } catch (e) {}
-      }
+      tryStop(whenRelease + r + 0.05);
     },
     detune: (cents, t) => { for (const d of detunes) d(cents, t); },
     output: env,

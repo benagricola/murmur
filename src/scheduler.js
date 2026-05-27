@@ -66,14 +66,21 @@ export function playSeedStep(seed, when) {
   const targetMidi = baseMidi + (step.offset || 0);
   const finalMidi = seed.quantize ? snapToScale(targetMidi) : targetMidi;
   const freq = freqFromMidi(finalMidi);
-  const sustainMs = step.duration !== undefined ? step.duration * seed.intervalMs : undefined;
+  // sustainMs MUST be a number for scheduled notes — undefined makes
+  // playPatch fall through to live mode, which never schedules voice
+  // stops and leaves oscillators running forever. Default to 1.0
+  // step-fractions so a pattern step with no explicit duration takes
+  // a full step's worth of time and self-terminates cleanly.
+  const stepDuration = step.duration !== undefined ? step.duration : 1.0;
+  const sustainMs = stepDuration * seed.intervalMs;
   playNoteAt(seed, when, freq, baseGain * step.velocity, sustainMs);
   if (step.extras && step.extras.length > 0) {
     for (const ex of step.extras) {
       const exMidi = baseMidi + (ex.offset || 0);
       const exFinalMidi = seed.quantize ? snapToScale(exMidi) : exMidi;
       const exFreq = freqFromMidi(exFinalMidi);
-      const exSustainMs = ex.duration !== undefined ? ex.duration * seed.intervalMs : sustainMs;
+      const exDuration = ex.duration !== undefined ? ex.duration : stepDuration;
+      const exSustainMs = exDuration * seed.intervalMs;
       playNoteAt(seed, when, exFreq, baseGain * (ex.velocity !== undefined ? ex.velocity : step.velocity), exSustainMs);
     }
     // Record this chord step for blob visualisation. Only chord steps

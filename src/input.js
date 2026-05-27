@@ -11,7 +11,9 @@ import {
   audioCtx, masterGain, initAudio,
 } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
-import { liveTimbre, rollLiveTimbre, regenerateLiveTimbre } from './timbres.js';
+import {
+  liveTimbre, rollLiveTimbre, regenerateLiveTimbre, LIVE_ROLE_OCTAVE_SHIFT,
+} from './timbres.js';
 import { state, activeLiveNotes, releasingNotes, sustainedMidis } from './state.js';
 import { rescheduleRecordingAutoFinish } from './recording.js';
 import {
@@ -35,8 +37,13 @@ export function liveNoteOn(midi, velocity = 0.7, source = 'qwerty') {
   if (!audioCtx) { initAudio(); return midi; }
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   if (activeLiveNotes.has(midi)) liveNoteOff(midi);
-  // Live input never snaps to scale, regardless of source.
-  const targetMidi = midi;
+  // Live input never snaps to scale, regardless of source. But we
+  // DO octave-shift per role so bass sits two octaves below the
+  // pressed key while melody stays at pitch — without this, a
+  // 25-key controller can't comfortably play bass and melody from
+  // the same key positions.
+  const roleShift = (LIVE_ROLE_OCTAVE_SHIFT[liveTimbre.role] || 0) * 12;
+  const targetMidi = midi + roleShift;
   const freq = freqFromMidi(targetMidi);
   const patch = liveTimbre.patch;
   const handle = playPatch(patch, audioCtx.currentTime, freq, 0.25 * velocity, null, (n) => n.connect(masterGain));

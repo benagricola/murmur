@@ -260,6 +260,21 @@ export const TIMBRE_ROLES = {
   voice:  { label: 'voi',   generate: generateVoice,  color: '#b393d6' },
 };
 
+// Per-role octave shift applied to LIVE keyboard notes so the same
+// physical key gives a sensibly different pitch depending on the
+// active role. The MiniLab 3 has only 25 keys (G3..G5), so without
+// this you'd press middle C and get the same C5 sound for both bass
+// and melody — defeating the role distinction. With the shift, bass
+// sits two octaves below where you press, hat two above, and so on.
+export const LIVE_ROLE_OCTAVE_SHIFT = {
+  kick:   -2,   // sub-bass kick range
+  snare:  -1,   // tom-ish low
+  hat:    +1,   // crisp high
+  bass:   -2,   // proper bass range
+  melody:  0,   // around the key you pressed
+  voice:  -1,   // pad/vocal a little lower than melody
+};
+
 // === Active role + live keyboard timbre ===
 // `activeRole` is the timbre that new voice seeds adopt when planted.
 // `liveTimbre` is what the keyboard plays through. Both live as

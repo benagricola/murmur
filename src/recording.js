@@ -113,6 +113,12 @@ function phraseFromRecording(buf) {
   }
   while (stepBuckets.length > 1 && stepBuckets[stepBuckets.length - 1].length === 0) stepBuckets.pop();
 
+  // Cap chord size at 5 notes (root + 4 extras). Without a cap, an
+  // arpeggiator dump or a finger-roll can stuff a single step with
+  // 8+ overlapping notes — the pattern visualisation can't show
+  // that legibly and the resulting sound is mush. 5 covers any
+  // diatonic / extended chord.
+  const MAX_CHORD_NOTES = 5;
   const toStep = (notes) => {
     if (notes.length === 0) return { offset: 0, velocity: 0, duration: 1.0 };
     notes.sort((a, b) => a.midi - b.midi);
@@ -125,7 +131,9 @@ function phraseFromRecording(buf) {
       };
     };
     const primary = noteToFields(notes[0]);
-    if (notes.length > 1) primary.extras = notes.slice(1).map(noteToFields);
+    if (notes.length > 1) {
+      primary.extras = notes.slice(1, MAX_CHORD_NOTES).map(noteToFields);
+    }
     return primary;
   };
 
