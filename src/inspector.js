@@ -202,6 +202,11 @@ export function selectSeed(id) {
       (opt) => {
         seed.intervalMs = opt.ms;
         seed.intervalFrac = opt.frac;   // canonical bar-fraction storage
+        // Force scheduler to re-anchor patternIdx at the new
+        // baseInterval. Without this, patternIdx (monotonic) points
+        // to a step whose fire time is now far in the future at the
+        // new (often slower) interval, so the seed goes silent.
+        seed.nextTrigger = 0;
         updatePatternLoopInfo(seed);
         takeSnapshotFn('tweaked rhythm');
       },

@@ -189,12 +189,12 @@ export function scheduleAhead() {
       }
     }
 
-    // Catch-up logic: if we're way behind (just started / playback
-    // start was moved), advance patternIdx to the next slot. For
-    // quantized seeds, snap to the grid boundary; for free-running
-    // seeds, anchor patternIdx to "as close to now as the formula
-    // allows" by computing what step would fire next.
-    if (seed.nextTrigger && seed.nextTrigger < now - 1) {
+    // Catch-up logic: re-anchor patternIdx when nextTrigger is
+    // stale OR has been cleared (set to 0 by a rhythm change /
+    // tempo change / play start). Without the !nextTrigger case,
+    // changing the rhythm picker mid-play left patternIdx pointing
+    // to a fireTime far in the future and the seed went silent.
+    if (!seed.nextTrigger || seed.nextTrigger < now - 1) {
       if (seed.quantize) {
         const since = now - state.playbackStartTime;
         seed.patternIdx = Math.max(0, Math.ceil(since / baseInterval));

@@ -4,7 +4,7 @@
 // with no held keys.
 
 import { freqFromMidi, snapToScale, SEED_COLORS } from './constants.js';
-import { NUM_HARMONICS, initAudio } from './audio/context.js';
+import { NUM_HARMONICS, initAudio, audioCtx } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
 import { seeds, state, seedById, activeLiveNotes } from './state.js';
 import {
@@ -16,6 +16,34 @@ import { refreshPadLights, paintScreen } from './output/minilab3.js';
 import { DRUM_KIT, DRUM_KIT_COLOURS, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 
 const RECORD_AUTO_FINISH_MS = 1500;  // stop after this much silence
+
+// Align a freshly recorded seed so its step 0 fires on the NEXT
+// bar boundary of the global playback clock. Without this, a seed
+// planted mid-bar starts at whatever pattern step the catch-up
+// logic in scheduler.scheduleAhead derives from (now -
+// playbackStartTime) / intervalSec — which is fine for sync but
+// means the user's first hit might not be on a downbeat after
+// recording. This way every fresh recording snaps cleanly to the
+// next bar so the user hears the loop "start" where they expect.
+//
+// If playback isn't running, we just leave patternIdx at 0 — the
+// next play press will start the seed from the top anyway.
+function alignSeedToNextBar(seed) {
+  if (!audioCtx || !state.isPlaying || !state.playbackStartTime) {
+    seed.patternIdx = 0;
+    seed.nextTrigger = 0;
+    return;
+  }
+  const now = audioCtx.currentTime;
+  const since = now - state.playbackStartTime;
+  const barSec = BAR_MS / 1000;
+  const intervalSec = seed.intervalMs / 1000;
+  // Round UP to the next whole-bar offset from playbackStartTime.
+  // Tiny epsilon so we don't sit exactly on now (would fire ~instantly).
+  const nextBarStart = (Math.floor(since / barSec) + 1) * barSec;
+  seed.patternIdx = Math.round(nextBarStart / intervalSec);
+  seed.nextTrigger = state.playbackStartTime + nextBarStart;
+}
 
 export function startRecording() {
   if (state.isRecording) return;
@@ -244,6 +272,7 @@ function plantRecordedSeed(result) {
     }
   }
 
+  alignSeedToNextBar(seed);
   syncRenderedSeeds();
   selectSeed(seed.id);
   takeSnapshot('recorded ' + label);
@@ -304,8 +333,20 @@ function plantDrumKitSeed(drumNotes) {
   // Don't trim trailing empty buckets — same reason as the tonal
   // path above. Bar-aligned loop length is the source of truth.
 
+  // Find the most-used slot in the recording. Empty buckets default
+  // to this slot so a user-toggled rest activates audibly — without
+  // a drumSlot the scheduler falls through to the marker patch and
+  // produces silence.
+  const slotCounts = {};
+  for (const n of drumNotes) slotCounts[n.slot] = (slotCounts[n.slot] || 0) + 1;
+  const primarySlot = Number(
+    Object.entries(slotCounts).sort((a, b) => b[1] - a[1])[0][0]
+  );
+
   const pattern = buckets.map((bucket) => {
-    if (bucket.length === 0) return { drumSlot: 0, velocity: 0, duration: 1.0 };
+    if (bucket.length === 0) {
+      return { drumSlot: primarySlot, velocity: 0, duration: 1.0 };
+    }
     // Loudest hit is the primary; others ride along as extras.
     bucket.sort((a, b) => b.velocity - a.velocity);
     const primary = bucket[0];
@@ -363,6 +404,7 @@ function plantDrumKitSeed(drumNotes) {
     }
   }
 
+  alignSeedToNextBar(seed);
   syncRenderedSeeds();
   selectSeed(seed.id);
   takeSnapshot('recorded drums · ' + slotsLabel);
