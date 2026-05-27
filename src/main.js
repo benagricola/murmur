@@ -38,6 +38,7 @@ import { reevaluateAllCaptures } from './pointer.js';
 
 import './recording.js';
 import './transport.js';
+import './bloom-wind-config.js';
 
 // Wire the cross-module handlers that break import cycles.
 setTakeSnapshotFn(takeSnapshot);

@@ -26,6 +26,19 @@ export const state = {
   // Pointer drag state — populated by input/pointer.js, read by the
   // tick loop so the live sweep-line preview can render mid-drag.
   sweepDrag: null,
+  // Per-kind tunables for blooms (pulses) and winds (sweeps). Read by
+  // audio/events.js spawnPulse / spawnSweep on every firing so live
+  // edits take effect immediately. Edited via the bloom/wind config
+  // window in src/bloom-wind-config.js.
+  bloomSettings: {
+    drop:   { maxRadius: 320, durationBars: 1 },
+    muffle: { maxRadius: 360, durationBars: 1 },
+    thin:   { maxRadius: 360, durationBars: 1 },
+  },
+  windSettings: {
+    rise: { durationBars: 4 },
+    fade: { durationBars: 4 },
+  },
 };
 
 export function seedById(id) { return seeds.find(s => s.id === id); }

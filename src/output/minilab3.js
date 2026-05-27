@@ -86,6 +86,10 @@ export function connectMinilab(outputs) {
   // One-time hint about setting the device-side arp Sync to Auto/Ext.
   // Suppressed on repeat connects via localStorage.
   setTimeout(showArpSyncHint, 1500);
+  // Kick off the continuous clock-tick stream — runs regardless of
+  // murmur's play state so the MiniLab arp can lock to our tempo as
+  // soon as the user engages it on the device.
+  ensureClockTimer();
   return true;
 }
 
@@ -104,6 +108,7 @@ export function disconnectMinilab() {
   if (midiOuts.length === 0) return;
   sendRaw([0x02, 0x00, 0x40, 0x6A, 0x20]);
   midiOuts = [];
+  stopClockTimer();
 }
 
 function sendRaw(bytes) {
@@ -439,7 +444,7 @@ export function realignEncoder(encSysId, value7bit) {
 let clockTimer = null;
 let clockNextTickMs = 0;
 let clockTicksSent = 0;     // diagnostic counter — accessible via murmurClockStatus()
-let clockStartMs = 0;       // wall-clock time of last Start
+let clockStartMs = 0;       // wall-clock time clock-tick stream began
 
 function sendRealtime(byte, timestamp) {
   if (!realtimeOut) return;
@@ -447,20 +452,38 @@ function sendRealtime(byte, timestamp) {
   catch (e) { console.warn('[minilab] realtime send failed', e); }
 }
 
-export function startClockOut() {
-  if (!realtimeOut) return;
-  // 0xFA = Start. Tells the MiniLab arp to (re)start from step 1.
-  sendRealtime(0xFA);
+// === Continuous clock-tick stream ===
+//
+// Per-beat 0xF8 ticks flow whenever a realtime port is bound — NOT
+// gated on murmur's play state. The MiniLab's onboard arpeggiator can
+// then phase-lock to murmur's tempo at any time (the user engages it
+// via the device's ARP button), without having to first press play
+// in the app. Tempo changes propagate within the 100ms lookahead.
+//
+// Start (0xFA) and Stop (0xFC) are separate from the tick stream:
+// they're transport markers tied to murmur's play button. A slaved
+// device that respects them will reset its arp position on Start.
+// Devices with their own transport (like the MiniLab arp button) can
+// just ignore them and free-run on clock.
+function ensureClockTimer() {
+  if (clockTimer || !realtimeOut) return;
   clockNextTickMs = performance.now();
   clockTicksSent = 0;
   clockStartMs = performance.now();
-  if (clockTimer) clearInterval(clockTimer);
   clockTimer = setInterval(scheduleClockAhead, 25);
 }
-
-export function stopClockOut() {
+function stopClockTimer() {
   if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
-  // 0xFC = Stop. Tells the MiniLab arp to halt and reset.
+}
+
+// Transport markers — fire on murmur play/stop. The continuous tick
+// stream above keeps running across these.
+export function startClockOut() {
+  if (!realtimeOut) return;
+  sendRealtime(0xFA);
+}
+export function stopClockOut() {
+  if (!realtimeOut) return;
   sendRealtime(0xFC);
 }
 
@@ -522,6 +545,12 @@ if (typeof window !== 'undefined') {
 function showArpSyncHint() {
   if (typeof window === 'undefined') return;
   if (localStorage.getItem('murmur.arpSyncHintShown') === '1') return;
+  // Idempotent: refreshMIDIInputs fires on every port state change, so
+  // connectMinilab (and this hint) can run multiple times in quick
+  // succession on a fresh reload. Without this guard we'd stack
+  // multiple identical toasts and the "got it" click would only
+  // dismiss the topmost one, making the popup feel un-clickable.
+  if (document.querySelector('.arp-sync-hint')) return;
   const el = document.createElement('div');
   el.className = 'arp-sync-hint';
   el.innerHTML = `
@@ -533,10 +562,13 @@ function showArpSyncHint() {
     <button class="arp-sync-hint-close">got it</button>
   `;
   document.body.appendChild(el);
-  el.querySelector('button').addEventListener('click', () => {
+  // Click anywhere on the toast (not just the button) dismisses it —
+  // makes the hit area generous so a slightly-off click still works.
+  const dismiss = () => {
     localStorage.setItem('murmur.arpSyncHintShown', '1');
     el.remove();
-  });
+  };
+  el.addEventListener('click', dismiss);
 }
 if (typeof window !== 'undefined') {
   // Re-show on demand for debugging — wipe the flag and call again.

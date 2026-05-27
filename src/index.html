@@ -124,6 +124,12 @@
       <div class="picker" id="length-picker"></div>
     </div>
 
+    <div class="pitch-row" id="volume-row">
+      <label>volume</label>
+      <input type="range" class="std" id="seed-vol-slider" min="0" max="100" step="1" value="35">
+      <span class="pitch-val" id="seed-vol-val">35%</span>
+    </div>
+
     <div class="toggle-row" id="quantize-row">
       <div class="toggle" id="quantize-toggle"></div>
       <span>quantize to grid</span>
@@ -143,6 +149,8 @@
     <div class="section" id="pattern-section">
       <div class="section-label"><span>melody</span><span>drag dots</span></div>
       <svg class="pattern-editor" id="pattern-editor" viewBox="0 0 276 100" preserveAspectRatio="none"></svg>
+      <div class="section-label"><span>volume curve</span><span>drag bars</span></div>
+      <svg class="velocity-editor" id="velocity-editor" viewBox="0 0 276 60" preserveAspectRatio="none"></svg>
       <div class="pattern-meta">
         <span id="pattern-len-info">4 steps</span>
         <span id="pattern-loop-info">5.0s loop</span>

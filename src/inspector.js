@@ -30,6 +30,7 @@ export const inspectorEl = document.getElementById('inspector');
 const harmonicEditorEl = document.getElementById('harmonic-editor');
 const hNumbersEl = document.getElementById('h-numbers');
 const patternEditorEl = document.getElementById('pattern-editor');
+const velocityEditorEl = document.getElementById('velocity-editor');
 
 for (let i = 0; i < NUM_HARMONICS; i++) {
   const bar = document.createElement('div');
@@ -214,6 +215,17 @@ export function selectSeed(id) {
   } else {
     lengthRow.style.display = 'none';
   }
+  const volRow = document.getElementById('volume-row');
+  if (seed.kind === 'voice') {
+    volRow.style.display = '';
+    const slider = document.getElementById('seed-vol-slider');
+    const val = document.getElementById('seed-vol-val');
+    const pct = Math.round((seed.gain || 0.35) * 100);
+    slider.value = pct;
+    val.textContent = pct + '%';
+  } else {
+    volRow.style.display = 'none';
+  }
   const qRow = document.getElementById('quantize-row');
   if (seed.kind === 'voice') {
     qRow.style.display = '';
@@ -238,6 +250,7 @@ export function selectSeed(id) {
       bar.style.background = amp > 0.05 ? seed.color : '';
     });
     renderPatternEditor(seed);
+    renderVelocityEditor(seed);
     updatePatternLoopInfo(seed);
   }
   const sphereRow = document.getElementById('sphere-row');
@@ -363,9 +376,107 @@ function highlightCurrentStep(seed) {
       d.setAttribute('stroke', 'none');
     }
   });
+  // Mirror the highlight onto the velocity-curve bar so the user can
+  // see which step's volume is currently firing.
+  const bars = velocityEditorEl.querySelectorAll('.vel-bar');
+  bars.forEach((b, i) => {
+    if (i === seed.currentStep) {
+      b.setAttribute('stroke', '#fff8c8'); b.setAttribute('stroke-width', '1.5');
+    } else {
+      b.setAttribute('stroke', 'none');
+    }
+  });
 }
 // Tell the scheduler to call our highlight function on each step.
 setStepHighlightHandler(highlightCurrentStep);
+
+// === Velocity / volume-curve editor ===
+// A short lane drawn directly beneath the melody pattern. One bar per
+// pattern step; bar height = step velocity (0..1). Empty/rest steps
+// (velocity < 0.05) render as a dimmed full-height ghost so the user
+// can grab them and turn them into hits. Drag a bar vertically to set
+// that step's velocity.
+function renderVelocityEditor(seed) {
+  velocityEditorEl.innerHTML = '';
+  const W = 276, H = 60, pad = 6;
+  const usableH = H - pad * 2;
+  const stepW = (W - pad * 2) / Math.max(1, seed.pattern.length);
+  // Baseline so empty bars are still visible / grabbable.
+  const baseline = document.createElementNS(SVGNS, 'line');
+  baseline.setAttribute('x1', pad); baseline.setAttribute('x2', W - pad);
+  baseline.setAttribute('y1', H - pad); baseline.setAttribute('y2', H - pad);
+  baseline.setAttribute('stroke', 'rgba(255,255,255,0.10)');
+  baseline.setAttribute('stroke-width', '1');
+  velocityEditorEl.appendChild(baseline);
+  seed.pattern.forEach((step, i) => {
+    const x = pad + stepW * i;
+    const w = Math.max(2, stepW - 2);
+    const vel = Math.max(0, Math.min(1, step.velocity || 0));
+    const barH = Math.max(2, vel * usableH);
+    const isRest = vel < 0.05;
+    // Ghost full-height bar so rests are still hit-targets.
+    const ghost = document.createElementNS(SVGNS, 'rect');
+    ghost.setAttribute('x', x); ghost.setAttribute('y', pad);
+    ghost.setAttribute('width', w); ghost.setAttribute('height', usableH);
+    ghost.setAttribute('fill', 'rgba(255,255,255,0.04)');
+    ghost.setAttribute('class', 'vel-ghost');
+    ghost.dataset.idx = i;
+    ghost.style.cursor = 'ns-resize';
+    velocityEditorEl.appendChild(ghost);
+    if (!isRest) {
+      const bar = document.createElementNS(SVGNS, 'rect');
+      bar.setAttribute('x', x);
+      bar.setAttribute('y', H - pad - barH);
+      bar.setAttribute('width', w);
+      bar.setAttribute('height', barH);
+      bar.setAttribute('fill', seed.color);
+      bar.setAttribute('fill-opacity', '0.75');
+      bar.setAttribute('class', 'vel-bar');
+      bar.dataset.idx = i;
+      bar.style.cursor = 'ns-resize';
+      velocityEditorEl.appendChild(bar);
+    }
+  });
+}
+
+let velDrag = null;
+velocityEditorEl.addEventListener('pointerdown', (e) => {
+  const target = e.target.closest('[data-idx]');
+  if (!target) return;
+  const seed = seedById(state.selectedSeedId);
+  if (!seed) return;
+  const idx = parseInt(target.dataset.idx);
+  velDrag = { seed, idx, rect: velocityEditorEl.getBoundingClientRect() };
+  velocityEditorEl.setPointerCapture(e.pointerId);
+  updateVelocityFromMouse(e);
+  e.preventDefault();
+});
+velocityEditorEl.addEventListener('pointermove', (e) => {
+  if (velDrag) updateVelocityFromMouse(e);
+});
+velocityEditorEl.addEventListener('pointerup', (e) => {
+  if (!velDrag) return;
+  takeSnapshotFn('tweaked volume curve');
+  velDrag = null;
+  try { velocityEditorEl.releasePointerCapture(e.pointerId); } catch (err) {}
+});
+function updateVelocityFromMouse(e) {
+  const rect = velDrag.rect;
+  const pad = 6;
+  const yInSvg = (e.clientY - rect.top) / rect.height * 60;
+  const usableH = 60 - pad * 2;
+  let vel = 1 - (yInSvg - pad) / usableH;
+  vel = Math.max(0, Math.min(1, vel));
+  // Snap to "off" near the bottom so the user can clearly turn a step
+  // into a rest without having to land exactly on zero.
+  if (vel < 0.05) vel = 0;
+  velDrag.seed.pattern[velDrag.idx].velocity = vel;
+  renderVelocityEditor(velDrag.seed);
+  // Also refresh the melody dots — rests render with a dim colour and
+  // become hits when velocity is brought up, so the visual feedback
+  // should match.
+  renderPatternEditor(velDrag.seed);
+}
 
 let patternDrag = null;
 patternEditorEl.addEventListener('pointerdown', (e) => {
@@ -436,6 +547,15 @@ document.getElementById('pitch-slider').addEventListener('input', (e) => {
   renderSeed(s);
 });
 document.getElementById('pitch-slider').addEventListener('change', () => takeSnapshotFn('tweaked pitch'));
+
+document.getElementById('seed-vol-slider').addEventListener('input', (e) => {
+  const s = seedById(state.selectedSeedId);
+  if (!s) return;
+  const pct = parseInt(e.target.value);
+  s.gain = pct / 100;
+  document.getElementById('seed-vol-val').textContent = pct + '%';
+});
+document.getElementById('seed-vol-slider').addEventListener('change', () => takeSnapshotFn('tweaked volume'));
 document.getElementById('quantize-toggle').addEventListener('click', () => {
   const s = seedById(state.selectedSeedId);
   if (!s) return;

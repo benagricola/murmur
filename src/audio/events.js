@@ -83,14 +83,20 @@ export function spawnPulse(cx, cy, kindKey) {
   if (!audioCtx) initAudio();
   const def = PULSE_KINDS[kindKey];
   if (!def) return null;
+  // Live tunables: state.bloomSettings overrides def's defaults so the
+  // user can edit radius/duration from the bloom config window without
+  // patching the def in-place. Falls back to def if no override exists.
+  const tune = (state.bloomSettings && state.bloomSettings[kindKey]) || {};
+  const maxRadius = tune.maxRadius != null ? tune.maxRadius : def.maxRadius;
+  const durationBars = tune.durationBars != null ? tune.durationBars : def.durationBars;
   const ev = {
     id: state.nextEventId++,
     type: 'pulse',
     kind: kindKey,
     color: def.color,
     cx, cy,
-    maxRadius: def.maxRadius,
-    durationMs: def.durationBars * BAR_MS,
+    maxRadius,
+    durationMs: durationBars * BAR_MS,
     startTimeMs: performance.now(),
     state: 'expanding',           // 'expanding' → 'popped' → 'done'
     popTimeMs: null,
@@ -122,13 +128,15 @@ export function spawnSweep(x0, y0, x1, y1, kindKey) {
   const def = SWEEP_KINDS[kindKey];
   if (!def) return null;
   if (Math.hypot(x1 - x0, y1 - y0) < 30) return null;
+  const tune = (state.windSettings && state.windSettings[kindKey]) || {};
+  const durationBars = tune.durationBars != null ? tune.durationBars : def.durationBars;
   const ev = {
     id: state.nextEventId++,
     type: 'sweep',
     kind: kindKey,
     color: def.color,
     x0, y0, x1, y1,
-    durationMs: def.durationBars * BAR_MS,
+    durationMs: durationBars * BAR_MS,
     startTimeMs: performance.now(),
     state: 'active',
     affectedSeedIds: new Set(),

@@ -356,6 +356,8 @@ export function setPlantMode(kind) {
   document.querySelectorAll('.plant-opt').forEach(el =>
     el.classList.toggle('active', el === opt));
   refreshPadLights();
+  // Broadcast so the bloom/wind config window can refresh.
+  window.dispatchEvent(new CustomEvent('plant-mode-changed', { detail: kind }));
 }
 document.getElementById('plant-group').addEventListener('click', (e) => {
   const opt = e.target.closest('.plant-opt');
