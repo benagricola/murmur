@@ -494,35 +494,59 @@ function updateVelocityFromMouse(e) {
   renderPatternEditor(velDrag.seed);
 }
 
+// Pattern editor gestures:
+//   - Click (no drag): toggle hit / rest. Rest → hit at default
+//     velocity, offset preserved. Hit → rest.
+//   - Drag (> a few px): activate as hit (if rest) and set pitch
+//     based on vertical drag position. Pitch tracks the pointer.
+// Distinguishing click from drag: track pointer movement distance;
+// commit on pointerup based on whether movement crossed a threshold.
+const PATTERN_DRAG_THRESHOLD = 4;
 let patternDrag = null;
 patternEditorEl.addEventListener('pointerdown', (e) => {
   if (e.target.tagName !== 'circle') return;
   const seed = seedById(state.selectedSeedId);
   if (!seed) return;
   const idx = parseInt(e.target.dataset.idx);
-  const step = seed.pattern[idx];
-  // Click a rest dot → activate it as a hit at default velocity.
-  // User can then drag to set pitch as normal. To turn a hit back
-  // into a rest, drag its bar to the bottom in the velocity-curve
-  // editor below. Shift+click flips a hit back to a rest in-place.
-  if (e.shiftKey && step.velocity >= 0.05) {
-    step.velocity = 0;
-    renderPatternEditor(seed);
-    renderVelocityEditor(seed);
-    takeSnapshotFn('rested step');
-    e.preventDefault();
-    return;
-  }
-  if (step.velocity < 0.05) {
-    step.velocity = 0.85;
-  }
-  patternDrag = { seed, idx, rect: patternEditorEl.getBoundingClientRect() };
-  updatePatternFromMouse(e);
+  patternDrag = {
+    seed, idx,
+    rect: patternEditorEl.getBoundingClientRect(),
+    startX: e.clientX,
+    startY: e.clientY,
+    moved: false,
+  };
   e.preventDefault();
 });
-window.addEventListener('pointermove', (e) => { if (patternDrag) updatePatternFromMouse(e); });
+window.addEventListener('pointermove', (e) => {
+  if (!patternDrag) return;
+  const dx = e.clientX - patternDrag.startX;
+  const dy = e.clientY - patternDrag.startY;
+  if (!patternDrag.moved && Math.hypot(dx, dy) > PATTERN_DRAG_THRESHOLD) {
+    patternDrag.moved = true;
+    // First crossing into "drag" → make sure this step is a hit so
+    // dragging actually has a visible effect.
+    const step = patternDrag.seed.pattern[patternDrag.idx];
+    if (step.velocity < 0.05) step.velocity = 0.85;
+  }
+  if (patternDrag.moved) updatePatternFromMouse(e);
+});
 window.addEventListener('pointerup', () => {
-  if (patternDrag) { takeSnapshotFn('tweaked melody'); patternDrag = null; }
+  if (!patternDrag) return;
+  if (!patternDrag.moved) {
+    // Click without drag → toggle hit ↔ rest, keep pitch as it was.
+    const step = patternDrag.seed.pattern[patternDrag.idx];
+    if (step.velocity < 0.05) {
+      step.velocity = 0.85;
+    } else {
+      step.velocity = 0;
+    }
+    renderPatternEditor(patternDrag.seed);
+    renderVelocityEditor(patternDrag.seed);
+    takeSnapshotFn(step.velocity > 0 ? 'activated step' : 'rested step');
+  } else {
+    takeSnapshotFn('tweaked melody');
+  }
+  patternDrag = null;
 });
 function updatePatternFromMouse(e) {
   const rect = patternDrag.rect;
