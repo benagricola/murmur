@@ -52,11 +52,26 @@ export function tryCreateContext() {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) { showAudioStatus('no web audio api', 'error'); return false; }
     audioCtx = new Ctx();
+    // Master chain: masterGain → masterLimiter → destination.
+    // The limiter is a high-ratio compressor that catches transient
+    // peaks above ~-2 dBFS so a loud chord or a hot drum hit doesn't
+    // clip the output. Settings: threshold -2, ratio 20:1 (brickwall-
+    // ish), 3ms attack to catch fast transients, 80ms release to let
+    // tails through without pumping.
     masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.35;
-    masterGain.connect(audioCtx.destination);
+    const masterLimiter = audioCtx.createDynamicsCompressor();
+    masterLimiter.threshold.value = -2;
+    masterLimiter.knee.value = 0;           // hard knee = limiter behaviour
+    masterLimiter.ratio.value = 20;         // brickwall
+    masterLimiter.attack.value = 0.003;
+    masterLimiter.release.value = 0.080;
+    masterGain.connect(masterLimiter);
+    masterLimiter.connect(audioCtx.destination);
     // Drum bus + compressor. Routing: drumBus → drumCompressor →
-    // masterGain. Drum voices in routeFinalOutput tap this bus.
+    // masterGain → masterLimiter → destination. The drum compressor
+    // glues the kit; the master limiter is the safety net for the
+    // whole mix.
     drumBus = audioCtx.createGain();
     drumBus.gain.value = 1.0;
     drumCompressor = audioCtx.createDynamicsCompressor();
