@@ -118,6 +118,19 @@ export const DRUM_KIT_FUNDAMENTAL_HZ = [
   3200,  // rim — high click
 ];
 
+// Per-slot pad LED colour. Mostly mapped to drum-role conventions
+// (kick = red, snare = amber, hats = yellow-ish, perc colour-coded).
+export const DRUM_KIT_COLOURS = [
+  '#e85a6f',  // kick
+  '#ffa94d',  // snare
+  '#ffd166',  // hat-closed
+  '#ffe4a0',  // hat-open
+  '#f06aae',  // clap
+  '#9474e8',  // tom-low
+  '#b394e8',  // tom-high
+  '#5fd2e8',  // rim
+];
+
 // Replace a slot's patch with a fresh build. Returns the new patch
 // so callers can read the latest.
 export function rerollSlot(slotIdx) {

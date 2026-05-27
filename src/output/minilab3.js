@@ -13,6 +13,8 @@
 
 import { state, seeds, seedById } from '../state.js';
 import { logOut } from '../midi-log-panel.js';
+import { DRUM_KIT_COLOURS } from '../audio/drum-kit.js';
+import { liveTimbre } from '../timbres.js';
 import { TIMBRE_ROLES, activeRole } from '../timbres.js';
 import { BPM } from '../tempo.js';
 import { noteName, freqFromMidi, midiFromFreq } from '../constants.js';
@@ -535,22 +537,32 @@ function paintPlantPad(id, kind) {
 }
 
 function paintBankA() {
-  // Pads 1-4: drum surface. Dim role colour from the selected voice,
-  // or default cyan if nothing's selected.
-  const seed = seedById(state.selectedSeedId);
-  const baseHex = (seed && seed.kind === 'voice' && seed.color) ? seed.color : '#5fd2e8';
-  const [r, g, b] = hex7(baseHex);
-  for (let i = 0; i < 4; i++) {
+  // Pad layout v2: bank A pads 1-8 are the 8-slot drum kit. Each
+  // pad lights with its drum's signature colour at moderate brightness
+  // so the user can tell which pad is which without looking at a
+  // legend. Tapped pads briefly brighten on key-down via the live
+  // refresh path.
+  for (let i = 0; i < 8; i++) {
+    const [r, g, b] = hex7(DRUM_KIT_COLOURS[i] || '#666666');
+    // Half-brightness so all 8 pads are visible without being garish.
     setLed(PAD_ID_BANK_A[i], r >> 1, g >> 1, b >> 1);
-  }
-  // Pads 5-8: the four "effect" plant modes.
-  for (let i = 0; i < 4; i++) {
-    paintPlantPad(PAD_ID_BANK_A[i + 4], PLANT_MODE_BANK_A_5_8[i]);
   }
 }
 
 function paintBankB() {
-  for (let i = 0; i < 8; i++) paintPlantPad(PAD_ID_BANK_B[i], PLANT_MODE_BANK_B[i]);
+  // Pad layout v2: bank B is the current live-timbre at 8 scale
+  // pitches. All 8 pads light with the live-timbre role's colour at
+  // varying brightness so the user knows which timbre is loaded and
+  // can read the keyboard layout at a glance. Brightest pad = the
+  // root (slot 0); pads dim with increasing pitch offset.
+  const roleKey = (liveTimbre && liveTimbre.role) || 'melody';
+  const role = TIMBRE_ROLES[roleKey];
+  const [r, g, b] = hex7(role ? role.color : '#5fd2e8');
+  for (let i = 0; i < 8; i++) {
+    // Linear brightness ramp: full at slot 0, 30% at slot 7.
+    const f = 1 - (i * 0.10);
+    setLed(PAD_ID_BANK_B[i], Math.round(r * f) >> 1, Math.round(g * f) >> 1, Math.round(b * f) >> 1);
+  }
 }
 
 function paintTransport() {

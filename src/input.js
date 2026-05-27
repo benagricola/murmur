@@ -8,9 +8,10 @@
 
 import { freqFromMidi, snapToScale, inScale, noteName, SCALE_ROOT_PC } from './constants.js';
 import {
-  audioCtx, masterGain, initAudio,
+  audioCtx, masterGain, drumBus, initAudio,
 } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
+import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 import {
   liveTimbre, rollLiveTimbre, regenerateLiveTimbre, revertLiveTimbre,
   LIVE_ROLE_OCTAVE_SHIFT,
@@ -133,6 +134,48 @@ function applyPitchBend(normalised) {
   }
 }
 
+// === Aftertouch → live filter modulation ===
+// Channel aftertouch (0xD0) → ramp filter cutoff on every active
+// live note via the voice's liveParams.cutoff. Pressure 0 = base
+// cutoff, pressure 1 = base + AFTERTOUCH_CUTOFF_RANGE_HZ.
+const AFTERTOUCH_BASE_CUTOFF_HZ = 800;
+const AFTERTOUCH_CUTOFF_RANGE_HZ = 4000;
+function applyChannelAftertouch(pressure) {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const targetHz = AFTERTOUCH_BASE_CUTOFF_HZ + pressure * AFTERTOUCH_CUTOFF_RANGE_HZ;
+  for (const note of activeLiveNotes.values()) {
+    rampCutoffOnHandle(note.handle, targetHz, now);
+  }
+  for (const note of releasingNotes) {
+    rampCutoffOnHandle(note.handle, targetHz, now);
+  }
+}
+
+// Poly aftertouch (0xA0) → per-note modulation. We look up the
+// specific live note by midi (or the bank-B pad mapping) and ramp
+// its cutoff only.
+function applyPolyAftertouch(midi, pressure) {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  // The pad might have been mapped to a different midi via bank-B
+  // scale routing — translate if so.
+  const liveMidi = bankBPadNoteToPadMidi.get(midi) || midi;
+  const note = activeLiveNotes.get(liveMidi);
+  if (!note) return;
+  const targetHz = AFTERTOUCH_BASE_CUTOFF_HZ + pressure * AFTERTOUCH_CUTOFF_RANGE_HZ;
+  rampCutoffOnHandle(note.handle, targetHz, now);
+}
+
+function rampCutoffOnHandle(handle, targetHz, now) {
+  if (!handle || !handle.voices) return;
+  for (const v of handle.voices) {
+    if (v.liveParams && v.liveParams.cutoff) {
+      try { v.liveParams.cutoff.setTargetAtTime(targetHz, now, 0.02); } catch (e) {}
+    }
+  }
+}
+
 function setSustainPedal(down) {
   if (down === state.sustainPedalDown) return;
   state.sustainPedalDown = down;
@@ -184,6 +227,34 @@ let encoderPressedMs = 0;
 // Last-seen value per transport CC so we can detect rising-edge
 // (button press) vs falling-edge (release). Keyed by CC number.
 const lastTransportCC = {};
+
+// === Drum-kit pad trigger (bank A, pad layout v2) ===
+// Bank-A pad N (notes 36-43) fires DRUM_KIT[N] at its fixed
+// fundamental, routed through drumBus so it gets the kit compressor
+// glue. One-shot — pad release ignored.
+function fireDrumPad(slot, velocity) {
+  if (!audioCtx) { initAudio(); return; }
+  if (slot < 0 || slot >= DRUM_KIT.length) return;
+  const freq = DRUM_KIT_FUNDAMENTAL_HZ[slot];
+  const gain = Math.max(0.1, Math.min(1.0, velocity)) * 0.5;
+  // Drum patches are category:'drum' so playPatch fires one-shot
+  // mode (internal envelope from voice, no shared attack/release).
+  // Route through drumBus when available; fall back to masterGain.
+  playPatch(DRUM_KIT[slot].patch, audioCtx.currentTime + 0.005, freq, gain, null,
+    (env) => env.connect(drumBus || masterGain));
+}
+
+// === Scale-pad live trigger (bank B, pad layout v2) ===
+// Bank-B pad N plays the current liveTimbre at the Nth scale step
+// above the keyboard root. Guardrails on → minor pentatonic + octave;
+// off → chromatic. The pad stays held: noteOff releases it.
+const BANK_B_SCALE_OFFSETS = [0, 2, 3, 5, 7, 8, 10, 12];
+const BANK_B_CHROMATIC_OFFSETS = [0, 1, 2, 3, 4, 5, 6, 7];
+const BANK_B_ROOT_MIDI = 60;   // middle C — could be made tunable later
+function bankBPadMidi(slot) {
+  const offsets = state.guardrails ? BANK_B_SCALE_OFFSETS : BANK_B_CHROMATIC_OFFSETS;
+  return BANK_B_ROOT_MIDI + (offsets[slot] || 0);
+}
 const midiSessionStart = performance.now();
 
 function midiCmdName(status) {
@@ -438,6 +509,23 @@ function handleMIDIMessage(evt) {
   if (status >= 0xF0) return;  // other system messages: ignore
   const cmd = status & 0xf0;
   const channel = (status & 0x0f) + 1;
+  // Channel aftertouch (0xD0): single-byte pressure for all notes
+  // on this channel. Used for expression on held notes — modulates
+  // every active live note's filter cutoff via the new liveParams
+  // surface from src/audio/voices.js.
+  if (cmd === 0xd0) {
+    const pressure = data[1] / 127;
+    applyChannelAftertouch(pressure);
+    return;
+  }
+  // Poly aftertouch (0xA0): per-note pressure. Targets the specific
+  // note's voice. Useful for shaped drone leans on bank-B held pads.
+  if (cmd === 0xa0) {
+    const midi = data[1];
+    const pressure = data[2] / 127;
+    applyPolyAftertouch(midi, pressure);
+    return;
+  }
   // Pitch bend (14-bit, lsb first)
   if (cmd === 0xe0) {
     const value = ((data[2] << 7) | data[1]) - 8192;
@@ -500,26 +588,25 @@ function handleMIDIMessage(evt) {
     if (handleControlCC(cc, v)) return;
     return;
   }
-  // Notes
+  // === Notes ===
+  // PAD ROUTING (pad layout v2)
+  //   Bank A (notes 36-43, ch10): drum kit slots 0-7. One-shot.
+  //   Bank B (notes 44-51, ch10): liveTimbre at scale pitches. Held.
+  //   Shift+pad: TODO — device sends different CCs (not notes) for
+  //     shifted gestures on this template; map them when the user
+  //     enumerates them on-device.
   if (cmd === 0x90 && data[2] > 0) {
     const note = data[1], velocity = data[2];
-    const bankA5_8Lo = PAD_NOTE_BANK_A_BASE + 4;
-    const bankA5_8Hi = PAD_NOTE_BANK_A_BASE + 7;
+    const bankALo = PAD_NOTE_BANK_A_BASE;
+    const bankAHi = PAD_NOTE_BANK_A_BASE + 7;
     const bankBLo = PAD_NOTE_BANK_B_BASE;
     const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
-    const isBankA5_8 = channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankA5_8Hi;
-    const isBankB    = channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi;
-    // Diagnostic single-pad mode: bypass the plant-mode change and
-    // the refresh-all-pads side effect. Send exactly one LED-paint
-    // command for the tapped pad with a bright test colour, so the
-    // user can see whether a single isolated write works.
-    if (diagSinglePadOnly && (isBankA5_8 || isBankB)) {
-      // pad index 0..15: bank A = 0..7 (note - PAD_NOTE_BANK_A_BASE),
-      // bank B = 8..15 (note - PAD_NOTE_BANK_B_BASE + 8).
-      const padIdx = isBankB
-        ? (note - PAD_NOTE_BANK_B_BASE + 8)
-        : (note - PAD_NOTE_BANK_A_BASE);
-      // Rotating colour so successive taps are visually distinct.
+    const isBankA = channel === PAD_CHANNEL && note >= bankALo && note <= bankAHi;
+    const isBankB = channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi;
+
+    // Diagnostic single-pad mode: paint the tapped pad and return.
+    if (diagSinglePadOnly && (isBankA || isBankB)) {
+      const padIdx = isBankB ? (note - bankBLo + 8) : (note - bankALo);
       const colours = ['#ff0040', '#40ff00', '#0040ff', '#ffff00', '#ff00ff', '#00ffff'];
       const colour = colours[padIdx % colours.length];
       console.log(`[diag] pad tap idx=${padIdx} note=${note} → paint ${colour}`);
@@ -527,33 +614,54 @@ function handleMIDIMessage(evt) {
       flashMidiLED();
       return;
     }
-    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise).
-    if (isBankA5_8) {
-      const kind = PAD_BANK_A_PLANT_5_8[note - bankA5_8Lo];
-      if (kind && setPlantModeFn) setPlantModeFn(kind);
+
+    // Bank A → drum kit slot (one-shot, no noteOff to track).
+    if (isBankA) {
+      fireDrumPad(note - bankALo, velocity / 127);
       flashMidiLED();
       return;
     }
-    // Bank B selects plant mode.
+    // Bank B → liveTimbre at scale pitch. Sustained — noteOff
+    // released below.
     if (isBankB) {
-      const kind = PAD_BANK_B_TO_PLANT[note - bankBLo];
-      if (kind && setPlantModeFn) setPlantModeFn(kind);
+      const padMidi = bankBPadMidi(note - bankBLo);
+      // Stash original pad note so noteOff can find the live entry.
+      bankBPadNoteToPadMidi.set(note, padMidi);
+      noteOn(padMidi, velocity / 127, 'midi-pad-b');
       flashMidiLED();
       return;
     }
+    // Anything else on a keyboard channel → live note.
     noteOn(note, velocity / 127, 'midi');
     return;
   }
   if (cmd === 0x80 || (cmd === 0x90 && data[2] === 0)) {
     const note = data[1];
-    // Pad noteOffs for plant-mode pads are no-ops (mode is sticky).
-    const bankA5_8Lo = PAD_NOTE_BANK_A_BASE + 4;
+    const bankALo = PAD_NOTE_BANK_A_BASE;
+    const bankAHi = PAD_NOTE_BANK_A_BASE + 7;
+    const bankBLo = PAD_NOTE_BANK_B_BASE;
     const bankBHi = PAD_NOTE_BANK_B_BASE + 7;
-    if (channel === PAD_CHANNEL && note >= bankA5_8Lo && note <= bankBHi) return;
+    // Bank A drum pads are one-shot; noteOff is a no-op.
+    if (channel === PAD_CHANNEL && note >= bankALo && note <= bankAHi) return;
+    // Bank B sustained pad: release via the stashed scale midi.
+    if (channel === PAD_CHANNEL && note >= bankBLo && note <= bankBHi) {
+      const padMidi = bankBPadNoteToPadMidi.get(note);
+      if (padMidi != null) {
+        noteOff(padMidi);
+        bankBPadNoteToPadMidi.delete(note);
+      }
+      return;
+    }
     noteOff(note);
     return;
   }
 }
+
+// Bank-B pads send a fixed note but PLAY a scale-derived midi. The
+// device's noteOff carries the pad's original note number; we need
+// to know which live-midi to release. Map kept while the pad is
+// held.
+const bankBPadNoteToPadMidi = new Map();
 
 function flashMidiLED() {
   const led = document.getElementById('midi-led');
