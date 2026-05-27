@@ -136,6 +136,12 @@ function applyPitchBend(normalised) {
 function setSustainPedal(down) {
   if (down === state.sustainPedalDown) return;
   state.sustainPedalDown = down;
+  // Visible logging — sustain state is invisible to the user, so a
+  // CC 64 that gets stuck "on" silently swallows every subsequent
+  // note-off. Print to console so it shows up if we ever wonder
+  // why notes are hanging.
+  console.log(`[sustain] pedal ${down ? 'DOWN' : 'UP'}` +
+    (down ? '' : ` — releasing ${sustainedMidis.size} held notes`));
   if (!down) {
     for (const m of sustainedMidis) liveNoteOff(m);
     sustainedMidis.clear();
@@ -690,12 +696,13 @@ function murmurPanic() {
   for (const k of PIANO_KEYS) {
     if (k.el.dataset.held) delete k.el.dataset.held;
   }
-  // Release all live notes.
+  // Sustain pedal is the most common cause of stuck notes — if CC 64
+  // got stuck "on" and never released, every noteOff has been silently
+  // deferred. Clear that state first, then release everything.
+  state.sustainPedalDown = false;
+  sustainedMidis.clear();
   for (const m of [...activeLiveNotes.keys()]) liveNoteOff(m);
-  // Force-stop any oscillators still in their release tail. The
-  // handles in releasingNotes hold references to the actual voice
-  // objects via closure on `release` — but we can also call stop
-  // through the output node's disconnect to silence them instantly.
+  // Force-stop any oscillators still in their release tail.
   for (const note of [...releasingNotes]) {
     try {
       if (note.handle && note.handle.output) {
@@ -704,9 +711,23 @@ function murmurPanic() {
     } catch (e) {}
     releasingNotes.delete(note);
   }
-  console.log('[panic] released all live notes');
+  console.log('[panic] released all live notes + cleared sustain');
 }
-if (typeof window !== 'undefined') window.murmurPanic = murmurPanic;
+if (typeof window !== 'undefined') {
+  window.murmurPanic = murmurPanic;
+  // Lighter-weight: just clear sustain, don't touch held notes.
+  // Useful when notes are hanging but you haven't lifted the pedal
+  // yet (or there is no pedal but state is stuck).
+  window.murmurReleaseSustain = () => {
+    if (!state.sustainPedalDown) {
+      console.log('[sustain] already up; sustainedMidis size =', sustainedMidis.size);
+    }
+    state.sustainPedalDown = false;
+    for (const m of [...sustainedMidis]) liveNoteOff(m);
+    sustainedMidis.clear();
+    console.log('[sustain] cleared');
+  };
+}
 
 export function highlightPianoKey(midi, on) {
   const k = PIANO_KEYS.find(x => x.midi === midi);
