@@ -35,20 +35,29 @@ export function setBPM(newBPM) {
   const ctx = audioCtx;
   const now = ctx ? ctx.currentTime : 0;
   for (const s of seeds) {
-    if (s.intervalMs) s.intervalMs = s.intervalMs * ratio;
-    if (s.decay)      s.decay      = s.decay      * ratio;
-    if (s.attackMs)   s.attackMs   = s.attackMs   * ratio;
-    if (s.delayMs) {
-      s.delayMs = s.delayMs * ratio;
-      // Live audio: ramp the delay-time param so the tail tracks
-      // tempo instead of jumping when the user next touches it.
+    // Lazy-backfill the bar-fraction fields for seeds that pre-date
+    // bar-fraction storage. After the first setBPM call every seed
+    // has them — subsequent reads derive *Ms straight from *Frac.
+    if (s.intervalFrac === undefined && s.intervalMs) s.intervalFrac = s.intervalMs / oldBar;
+    if (s.decayFrac    === undefined && s.decay)      s.decayFrac    = s.decay      / oldBar;
+    if (s.attackFrac   === undefined && s.attackMs)   s.attackFrac   = s.attackMs   / oldBar;
+    if (s.delayFrac    === undefined && s.delayMs)    s.delayFrac    = s.delayMs    / oldBar;
+
+    // Derive the ms-domain copies from the canonical bar fractions.
+    // No multiply-by-ratio — eliminates floating-point drift across
+    // back-and-forth tempo changes.
+    if (s.intervalFrac !== undefined) s.intervalMs = s.intervalFrac * BAR_MS;
+    if (s.decayFrac    !== undefined) s.decay      = s.decayFrac    * BAR_MS;
+    if (s.attackFrac   !== undefined) s.attackMs   = s.attackFrac   * BAR_MS;
+    if (s.delayFrac    !== undefined) {
+      s.delayMs = s.delayFrac * BAR_MS;
+      // Ramp the live delay-time so the tail tracks tempo smoothly.
       if (s.delayNode && ctx) {
         s.delayNode.delayTime.setTargetAtTime(s.delayMs / 1000, now, 0.05);
       }
     }
-    // Phase-preserve: rescale the time-until-next-trigger by the same
-    // ratio. Seeds keep playing through tempo changes without dropping
-    // or doubling notes.
+    // Phase-preserve: rescale time-until-next-trigger by the same
+    // ratio so each seed continues from its exact rhythmic position.
     if (s.nextTrigger && ctx) {
       const remaining = s.nextTrigger - now;
       if (remaining > 0) s.nextTrigger = now + remaining * ratio;

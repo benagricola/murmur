@@ -22,7 +22,7 @@ import { audioCtx, setMasterVol } from './audio/context.js';
 import { state, seedById } from './state.js';
 import { renderSeed } from './seeds.js';
 import { setBPM } from './transport.js';
-import { BPM } from './tempo.js';
+import { BPM, BAR_MS } from './tempo.js';
 import { popupEncoder, popupFader } from './output/minilab3.js';
 import { refreshInspector } from './inspector.js';
 import { liveTimbre, LIVE_ROLE_OCTAVE_SHIFT } from './timbres.js';
@@ -177,6 +177,7 @@ function handleEncoderVoice(seed, idx, value) {
       const opt = RHYTHM_OPTIONS[ccPickIdx(value, RHYTHM_OPTIONS)];
       if (opt && seed.intervalMs !== opt.ms) {
         seed.intervalMs = opt.ms;
+        seed.intervalFrac = opt.frac;       // canonical bar-fraction
         seed.nextTrigger = 0;
       }
       popupEncoder(value, 'rhythm', opt ? opt.label : '');
@@ -187,6 +188,7 @@ function handleEncoderVoice(seed, idx, value) {
       const opt = LENGTH_OPTIONS[ccPickIdx(value, LENGTH_OPTIONS)];
       if (opt && seed.decay !== opt.ms) {
         seed.decay = opt.ms;
+        seed.decayFrac = opt.frac;          // canonical bar-fraction
         seed._cachedPatch = null;
       }
       popupEncoder(value, 'length', opt ? opt.label : '');
@@ -235,6 +237,7 @@ function handleEncoderModifier(seed, idx, value) {
     }
     if (seed.modifierKind === 'ripple') {
       seed.delayMs = ccRange(value, 60, 1200);
+      seed.delayFrac = seed.delayMs / BAR_MS;   // canonical bar-fraction
       if (seed.delayNode && audioCtx) {
         seed.delayNode.delayTime.setTargetAtTime(seed.delayMs / 1000, audioCtx.currentTime, 0.02);
       }

@@ -10,6 +10,7 @@ import {
   nearestOptionIdx, snapToScale, freqFromMidi, midiFromFreq, noteName,
 } from './constants.js';
 import { audioCtx, NUM_HARMONICS } from './audio/context.js';
+import { BAR_MS } from './tempo.js';
 import { createReverbIR } from './audio/chains.js';
 import { TIMBRE_ROLES } from './timbres.js';
 import { seeds, seedById, state } from './state.js';
@@ -93,7 +94,9 @@ export function selectSeed(id) {
         const gen = TIMBRE_ROLES[opt.key].generate();
         seed.harmonics = gen.harmonics;
         seed.decay = gen.decay;
+        seed.decayFrac = gen.decay / BAR_MS;
         seed.attackMs = gen.attackMs;
+        seed.attackFrac = gen.attackMs / BAR_MS;
         seed.synthesisModel = gen.synthesisModel;
         seed.patch = gen.patch;
         seed._cachedPatch = null;
@@ -149,6 +152,7 @@ export function selectSeed(id) {
       RIPPLE_DELAY_OPTIONS,
       (opt) => {
         seed.delayMs = opt.ms;
+        seed.delayFrac = opt.frac;     // canonical bar-fraction storage
         if (seed.delayNode) seed.delayNode.delayTime.setTargetAtTime(opt.ms / 1000, audioCtx.currentTime, 0.02);
         takeSnapshotFn('tweaked delay');
       },
@@ -197,6 +201,7 @@ export function selectSeed(id) {
       RHYTHM_OPTIONS,
       (opt) => {
         seed.intervalMs = opt.ms;
+        seed.intervalFrac = opt.frac;   // canonical bar-fraction storage
         updatePatternLoopInfo(seed);
         takeSnapshotFn('tweaked rhythm');
       },
@@ -209,7 +214,11 @@ export function selectSeed(id) {
     buildPicker(
       document.getElementById('length-picker'),
       LENGTH_OPTIONS,
-      (opt) => { seed.decay = opt.ms; takeSnapshotFn('tweaked length'); },
+      (opt) => {
+        seed.decay = opt.ms;
+        seed.decayFrac = opt.frac;     // canonical bar-fraction storage
+        takeSnapshotFn('tweaked length');
+      },
       () => nearestOptionIdx(LENGTH_OPTIONS, seed.decay)
     );
   } else {
@@ -583,7 +592,9 @@ document.getElementById('regen-btn').addEventListener('click', async () => {
   const gen = role.generate();
   s.harmonics = gen.harmonics;
   s.decay = gen.decay;
+  s.decayFrac = gen.decay / BAR_MS;
   s.attackMs = gen.attackMs;
+  s.attackFrac = gen.attackMs / BAR_MS;
   s.synthesisModel = gen.synthesisModel;
   s.patch = gen.patch;
   s._cachedPatch = null;

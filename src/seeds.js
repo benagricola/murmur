@@ -35,7 +35,33 @@ export const PEAK_STRENGTH = 0.30;
 export const PEAK_WIDTH = 0.08;
 export const PEAK_TIP_FACTOR = 1 + PEAK_STRENGTH + 0.02;
 
+// Bar-fraction storage: timing fields (intervalMs, decay, attackMs,
+// delayMs) all derive from a corresponding *Frac field — fraction of
+// the current BAR_MS. transport.setBPM() recomputes the *Ms fields
+// from the *Frac fields each tempo change, so:
+// (a) repeated tempo changes don't accumulate floating-point error
+//     (the *Ms read is always `frac * BAR_MS`, never `prev * ratio`),
+// (b) scheduled events stay musically aligned across tempo changes
+//     because the canonical value is "this seed plays a 1/4 note",
+//     not "this seed plays every 500 ms".
+// Callers that mutate seed.intervalMs (encoder turn, picker selection)
+// should also update seed.intervalFrac via setSeedTiming() below.
+
+export function setSeedTiming(seed, key, ms) {
+  seed[key] = ms;
+  const fracKey = key === 'intervalMs' ? 'intervalFrac'
+               : key === 'decay'       ? 'decayFrac'
+               : key === 'attackMs'    ? 'attackFrac'
+               : key === 'delayMs'     ? 'delayFrac'
+               : null;
+  if (fracKey) seed[fracKey] = BAR_MS > 0 ? ms / BAR_MS : 0;
+}
+
 export function makeSeed(opts) {
+  const intervalMs = opts.intervalMs || BEAT_MS;
+  const decay      = opts.decay      || 500;
+  const attackMs   = opts.attackMs !== undefined ? opts.attackMs : 8;
+  const delayMs    = opts.delayMs    || 469;
   const seed = {
     id: state.nextSeedId++,
     kind: opts.kind || 'voice',
@@ -44,8 +70,10 @@ export function makeSeed(opts) {
     r: opts.r || 40,
     color: opts.color,
     fundamental: opts.fundamental || 220,
-    decay: opts.decay || 500,
-    intervalMs: opts.intervalMs || BEAT_MS,
+    decay,
+    decayFrac:    decay      / BAR_MS,
+    intervalMs,
+    intervalFrac: intervalMs / BAR_MS,
     harmonics: opts.harmonics ? opts.harmonics.slice() : new Array(NUM_HARMONICS).fill(0),
     gain: opts.gain || 0.32,
     label: opts.label || (opts.kind === 'modifier' ? opts.modifierKind : 'seed'),
@@ -79,7 +107,8 @@ export function makeSeed(opts) {
     capturedByIds: new Set(),
     capturedSeedIds: new Set(),
     sphereR: opts.sphereR || 0,
-    delayMs: opts.delayMs || 469,
+    delayMs,
+    delayFrac: delayMs / BAR_MS,
     reverbSec: opts.reverbSec || 2.0,
     delayInput: null,
     delayNode: null,
@@ -88,7 +117,8 @@ export function makeSeed(opts) {
     role: opts.role || null,
     swing: opts.swing !== undefined ? opts.swing : 0.5,
     synthesisModel: opts.synthesisModel || 'additive',
-    attackMs: opts.attackMs !== undefined ? opts.attackMs : 8,
+    attackMs,
+    attackFrac: attackMs / BAR_MS,
     polyFactor: opts.polyFactor !== undefined ? opts.polyFactor : 2/3,
     muted: opts.muted || false,
     patch: opts.patch || null,
