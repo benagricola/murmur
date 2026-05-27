@@ -106,18 +106,24 @@ function phraseFromRecording(buf) {
   const fundamentalFreq = freqFromMidi(fundamentalMidi);
 
   const naturalStepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
-  const maxSteps = state.guardrails ? 16 : 32;
-  const totalSpan = Math.max(...notes.map(n => n.t)) + naturalStepMs;
-  // If the recording is longer than maxSteps × naturalStepMs can
-  // cover, expand the step size to fit. Without this, late notes
-  // (anything past maxSteps × naturalStepMs ms) get jammed into the
-  // final bucket — which is why arp recordings used to end with all
-  // remaining notes piled onto one step. Sacrifice timing resolution
-  // over note-cramming.
+  const stepsPerBar = state.guardrails ? 16 : 32;
+  // Up to 4 bars at fine resolution before the resolution expands.
+  // Previously we capped at 1 bar (16 steps), which forced longer
+  // recordings into a coarser grid and produced odd timing.
+  const maxSteps = stepsPerBar * 4;
+  const totalSpan = Math.max(...notes.map(n => n.t)) + naturalStepMs * 0.5;
   const stepMs = totalSpan > maxSteps * naturalStepMs
     ? totalSpan / maxSteps
     : naturalStepMs;
-  const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
+  // Round loop length UP to the nearest whole bar. Otherwise a
+  // 1.5-bar recording loops at 1.5 bars and the seam between the
+  // last note and the first repeat produces a double-hit.
+  const stepsForSpan = Math.max(stepsPerBar, Math.ceil(totalSpan / stepMs));
+  const stepsPerBarAtThisRes = Math.max(1, Math.round(BAR_MS / stepMs));
+  const totalSteps = Math.min(
+    maxSteps,
+    Math.ceil(stepsForSpan / stepsPerBarAtThisRes) * stepsPerBarAtThisRes
+  );
 
   // Bucket notes by step + chord-cluster within step.
   //
@@ -255,12 +261,22 @@ function plantDrumKitSeed(drumNotes) {
   if (drumNotes.length === 0) return;
 
   const naturalStepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
-  const maxSteps = state.guardrails ? 16 : 32;
-  const totalSpan = Math.max(...drumNotes.map(n => n.t)) + naturalStepMs;
+  const stepsPerBar = state.guardrails ? 16 : 32;
+  // Up to 4 bars at fine resolution before expansion. Same logic as
+  // tonal phraseFromRecording — see comments there.
+  const maxSteps = stepsPerBar * 4;
+  const totalSpan = Math.max(...drumNotes.map(n => n.t)) + naturalStepMs * 0.5;
   const stepMs = totalSpan > maxSteps * naturalStepMs
     ? totalSpan / maxSteps
     : naturalStepMs;
-  const totalSteps = Math.min(maxSteps, Math.max(4, Math.ceil(totalSpan / stepMs)));
+  // Round loop length UP to the nearest whole bar so the seam between
+  // the last hit and the first repeat doesn't produce a double-hit.
+  const stepsForSpan = Math.max(stepsPerBar, Math.ceil(totalSpan / stepMs));
+  const stepsPerBarAtThisRes = Math.max(1, Math.round(BAR_MS / stepMs));
+  const totalSteps = Math.min(
+    maxSteps,
+    Math.ceil(stepsForSpan / stepsPerBarAtThisRes) * stepsPerBarAtThisRes
+  );
 
   // Bucket by step. Drum hits within the same step (regardless of
   // slot) all live in the same bucket — kick + hat fired together
