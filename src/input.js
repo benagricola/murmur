@@ -208,6 +208,7 @@ import {
   ENCODER_LONG_PRESS_MS,
   TRANSPORT_CC,
   TRANSPORT_UNMAPPED_CCS,
+  TRANSPORT_RISING_THRESHOLD,
 } from './devices/minilab3.js';
 
 // === MIDI debug log ===
@@ -553,19 +554,36 @@ function handleMIDIMessage(evt) {
   if (cmd === 0xb0) {
     const cc = data[1], v = data[2];
     if (cc === SUSTAIN_PEDAL_CC) { setSustainPedal(v >= 64); return; }
-    // Shift + transport buttons send momentary action CCs. Rising
-    // edge (value crossing >= 64) triggers the action; the release
-    // back to 0 is ignored. We don't track the shift modifier
-    // ourselves — the device handles that internally and just sends
-    // us the action CC.
-    if (cc === TRANSPORT_CC.playStop) {
-      const rising = v >= 64 && (lastTransportCC[cc] || 0) < 64;
-      lastTransportCC[cc] = v;
-      if (rising) {
-        if (state.isPlaying) transportStop();
-        else transportPlay();
+    // Shift + transport buttons send momentary action CCs. Trigger
+    // on rising edge (value crossing the threshold from below); the
+    // release back to 0 is ignored. We don't track the shift
+    // modifier ourselves — the device handles that internally and
+    // just sends us the action CC.
+    {
+      const isTransportCC = cc === TRANSPORT_CC.loop || cc === TRANSPORT_CC.stop
+        || cc === TRANSPORT_CC.playStop || cc === TRANSPORT_CC.record
+        || cc === TRANSPORT_CC.tap;
+      if (isTransportCC) {
+        const t = TRANSPORT_RISING_THRESHOLD;
+        const rising = v >= t && (lastTransportCC[cc] || 0) < t;
+        lastTransportCC[cc] = v;
+        if (rising) {
+          if (cc === TRANSPORT_CC.playStop) {
+            if (state.isPlaying) transportStop(); else transportPlay();
+          } else if (cc === TRANSPORT_CC.stop) {
+            transportStop();
+          } else if (cc === TRANSPORT_CC.record) {
+            transportRecord();
+          } else if (cc === TRANSPORT_CC.tap) {
+            transportTap();
+          } else if (cc === TRANSPORT_CC.loop) {
+            // No loop state in the app today — just log so the user
+            // sees the press lands. Hook into a future loop feature.
+            console.log('[transport] shift+loop pressed (no action wired)');
+          }
+        }
+        return;
       }
-      return;
     }
     // CCs we know about but don't act on (e.g. CC 27 is the bare
     // shift-state indicator). Swallow them silently so they don't

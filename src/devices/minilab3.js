@@ -35,24 +35,33 @@ export const MOD_STRIP_CC = 1;
 // shifted action. We don't track shift ourselves; we just listen for
 // the action CC.
 //
-// CC fingerprint observed on a shift+play press (in order):
-//   CC 27  = 0      ← shift state: was on, now off (or device echo)
-//   CC 27  = 127    ← shift state: held
-//   CC 107 = 127    ← the actual shift+play action
-//
-// So CC 27 is the bare Shift button — ignore it. CC 107 is the
-// transport action. Trigger on rising edge (value crossing >= 64);
-// the release (back to 0) is ignored.
-//
-// Other transport CCs (shift+stop, shift+record, shift+tap, shift+
-// loop) need to be enumerated and added here once the user reports
-// the CC number each sends.
+// CCs captured from the user's device by holding Shift + tapping
+// each round transport button in turn. CC 27 is the shift state
+// itself (no action). 105-109 are the action CCs — each fires a
+// 127 on press, 0 on release. Trigger on rising edge (value >= 64);
+// release ignored.
+//   CC 27  = bare Shift state — ignored
+//   CC 105 = shift + loop / repeat
+//   CC 106 = shift + stop
+//   CC 107 = shift + play
+//   CC 108 = shift + record
+//   CC 109 = shift + tap tempo  (value can be < 127; we still trigger
+//                                 on rising edge crossing >= 16 since
+//                                 the device occasionally sends 17)
 export const TRANSPORT_CC = {
+  loop:     105,
+  stop:     106,
   playStop: 107,
+  record:   108,
+  tap:      109,
 };
 // CC 27 is just the shift modifier state echoed by the device — log
 // it for visibility but never act on it.
 export const TRANSPORT_UNMAPPED_CCS = new Set([27]);
+// Some transport CCs send values other than 127 (e.g. tap-tempo
+// sends 17 on the user's device). Lower threshold so the rising
+// edge still triggers.
+export const TRANSPORT_RISING_THRESHOLD = 8;
 
 // 8 panel encoders, slot 0..7, all absolute 0..127 in the user's
 // template. CC numbers are device-defaults — re-confirmed from a real

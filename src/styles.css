@@ -432,6 +432,18 @@ body::before {
 
 .vol-wrap { display: flex; gap: 8px; align-items: center; }
 
+/* Reserve enough width for "200 bpm" so the top bar doesn't reflow
+   when the tempo crosses from 2 to 3 digits (~99 → ~100). Monospace
+   font already keeps digits a constant width; we just need the
+   container to hold the longest expected string. Right-aligned so
+   the units stay flush with whatever follows. */
+#tempo-val {
+  display: inline-block;
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Soft-takeover marker on the vol / tempo sliders. The wrap holds
    the native range input + an absolutely-positioned marker line
    showing where the MiniLab's physical fader currently sits when
