@@ -180,7 +180,10 @@ function phraseFromRecording(buf) {
     // If we walked off the end, the note's lost. Acceptable for
     // very long recordings; loop length is capped at totalSteps.
   }
-  while (stepBuckets.length > 1 && stepBuckets[stepBuckets.length - 1].length === 0) stepBuckets.pop();
+  // Don't trim trailing empty buckets — totalSteps is already bar-
+  // aligned above, and a single hit at step 0 should produce a
+  // 1-bar loop with trailing rests, not a 1-step pattern that
+  // loops every 16th-note.
 
   const toStep = (notes) => {
     if (notes.length === 0) return { offset: 0, velocity: 0, duration: 1.0 };
@@ -298,7 +301,8 @@ function plantDrumKitSeed(drumNotes) {
       buckets[step].push({ slot: n.slot, velocity: n.velocity, tOffset, t: n.t });
     }
   }
-  while (buckets.length > 1 && buckets[buckets.length - 1].length === 0) buckets.pop();
+  // Don't trim trailing empty buckets — same reason as the tonal
+  // path above. Bar-aligned loop length is the source of truth.
 
   const pattern = buckets.map((bucket) => {
     if (bucket.length === 0) return { drumSlot: 0, velocity: 0, duration: 1.0 };
