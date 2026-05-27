@@ -13,7 +13,7 @@
 import {
   WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR, SEED_COLORS,
 } from './constants.js';
-import { BEAT_MS } from './tempo.js';
+import { BEAT_MS, BAR_MS } from './tempo.js';
 import { TIMBRE_ROLES } from './timbres.js';
 import { setupModifierChain } from './audio/chains.js';
 import { NUM_HARMONICS } from './audio/context.js';
