@@ -514,17 +514,7 @@ function buildPiano() {
     k.dataset.midi = midi;
     if (inScale(midi)) k.classList.add('in-scale');
     if ((midi % 12) === SCALE_ROOT_PC) k.textContent = noteName(midi);
-    k.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      noteOn(midi, 0.7);
-      k.dataset.held = '1';
-    });
-    k.addEventListener('pointerup', () => {
-      if (k.dataset.held) { noteOff(midi); delete k.dataset.held; }
-    });
-    k.addEventListener('pointerleave', () => {
-      if (k.dataset.held) { noteOff(midi); delete k.dataset.held; }
-    });
+    attachPianoKeyHandlers(k, midi);
     piano.appendChild(k);
     PIANO_KEYS.push({ midi, kind: 'white', el: k });
   });
@@ -539,22 +529,82 @@ function buildPiano() {
     k.style.width = blackWPct + '%';
     k.style.left = `calc(${(whiteIdx + 1) * whiteW}% - ${blackWPct / 2}%)`;
     k.dataset.midi = midi;
-    k.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      noteOn(midi, 0.7);
-      k.dataset.held = '1';
-    });
-    k.addEventListener('pointerup', () => {
-      if (k.dataset.held) { noteOff(midi); delete k.dataset.held; }
-    });
-    k.addEventListener('pointerleave', () => {
-      if (k.dataset.held) { noteOff(midi); delete k.dataset.held; }
-    });
+    attachPianoKeyHandlers(k, midi);
     piano.appendChild(k);
     PIANO_KEYS.push({ midi, kind: 'black', el: k });
   });
 }
+
+// Wire pointer events on a piano key. Critically: setPointerCapture
+// on pointerdown so the pointer stays "captured" by this key — any
+// subsequent pointerup / pointercancel for that pointer ID is
+// guaranteed to fire on THIS element regardless of where the cursor
+// is when released. Without capture, pointer drift off the key
+// before release would orphan the note (pointerup would fire on a
+// different element and we'd never call noteOff).
+function attachPianoKeyHandlers(k, midi) {
+  const release = () => {
+    if (k.dataset.held) { noteOff(midi); delete k.dataset.held; }
+  };
+  k.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { k.setPointerCapture(e.pointerId); } catch (e) {}
+    noteOn(midi, 0.7);
+    k.dataset.held = '1';
+  });
+  k.addEventListener('pointerup', release);
+  k.addEventListener('pointercancel', release);
+  // pointerleave still useful: if capture fails for any reason, this
+  // catches the drag-off case too.
+  k.addEventListener('pointerleave', release);
+}
+
 buildPiano();
+
+// Belt-and-braces safety net: a window-level pointerup releases any
+// piano key whose `held` flag wasn't cleared by the per-key handler.
+// Triggers in corner cases like a system gesture interruption or the
+// window losing focus mid-press.
+window.addEventListener('pointerup', () => {
+  for (const k of PIANO_KEYS) {
+    if (k.el.dataset.held) {
+      noteOff(k.midi);
+      delete k.el.dataset.held;
+    }
+  }
+});
+window.addEventListener('blur', () => {
+  // Window lost focus — release everything to be safe.
+  murmurPanic();
+});
+
+// === Panic — kill every held / decaying live note now ===
+// Exposed on window so it can be triggered from DevTools when a note
+// gets stuck for any reason. Releases all activeLiveNotes via the
+// normal liveNoteOff path, then force-stops any oscillators still in
+// the release tail via releasingNotes.
+function murmurPanic() {
+  // Release everything still marked held on the piano.
+  for (const k of PIANO_KEYS) {
+    if (k.el.dataset.held) delete k.el.dataset.held;
+  }
+  // Release all live notes.
+  for (const m of [...activeLiveNotes.keys()]) liveNoteOff(m);
+  // Force-stop any oscillators still in their release tail. The
+  // handles in releasingNotes hold references to the actual voice
+  // objects via closure on `release` — but we can also call stop
+  // through the output node's disconnect to silence them instantly.
+  for (const note of [...releasingNotes]) {
+    try {
+      if (note.handle && note.handle.output) {
+        note.handle.output.disconnect();
+      }
+    } catch (e) {}
+    releasingNotes.delete(note);
+  }
+  console.log('[panic] released all live notes');
+}
+if (typeof window !== 'undefined') window.murmurPanic = murmurPanic;
 
 export function highlightPianoKey(midi, on) {
   const k = PIANO_KEYS.find(x => x.midi === midi);
