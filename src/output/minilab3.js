@@ -22,12 +22,17 @@ import { labelFor } from '../labels.js';
 const HEADER = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42];
 const FOOTER = [0xF7];
 
-// All MiniLab outputs we've seen on this device — we send SysEx to
-// every one of them and let the device pick. Different firmware
-// versions route lights / screen through different ports (some use
-// the main port, some the ALV port). Spamming all of them is harmless
-// because the device ignores SysEx with the wrong manufacturer ID.
+// Two MIDI output bindings, each used for different traffic:
+//   midiOuts     — SysEx (LED + screen) destinations. In DAW mode the
+//                  MiniLab only processes these on its "DAW virtual"
+//                  port (ALV / MIDIIN2 / "MiniLab 3 DAW"). The main
+//                  MIDI port silently drops them.
+//   realtimeOut  — MIDI Real-Time messages (Clock / Start / Stop)
+//                  destination. The MiniLab arpeggiator listens for
+//                  these on the main MIDI port, NOT the DAW port.
+//                  Sending realtime to the wrong port is a no-op.
 let midiOuts = [];
+let realtimeOut = null;
 
 // Bind to the MIDI output the MiniLab uses for LED + screen SysEx.
 // Per the Ableton remote-script implementation: in DAW mode, only
@@ -46,9 +51,18 @@ export function connectMinilab(outputs) {
   else if (allMinilab.length > 0) midiOuts = allMinilab;
   else if (outputs && outputs.length > 0) midiOuts = [outputs[0]];
   else midiOuts = [];
+  // Realtime port: the main "Minilab3:Minilab3 MIDI" port — i.e. NOT
+  // any of the special-purpose ports (ALV / MCU / DIN-THRU). Falls
+  // back to the first MiniLab output if the name match misses.
+  realtimeOut = allMinilab.find(o => {
+    const n = (o.name || '').toLowerCase();
+    return n.includes('midi') && !/alv|mcu|hui|din|thru|midiin2|daw/.test(n);
+  }) || allMinilab[0] || null;
   if (midiOuts.length === 0) return false;
   console.log('[minilab] sending SysEx to', midiOuts.map(o => o.name),
     dawPort ? '(DAW port matched)' : '(no DAW port found, spraying all)');
+  console.log('[minilab] sending realtime (clock/start/stop) to',
+    realtimeOut ? realtimeOut.name : '(no port)');
   // Universal Device Inquiry — standard MIDI request that any
   // compliant device should answer. Sent BEFORE the Arturia-specific
   // handshake so we can capture firmware version even if the device
@@ -155,14 +169,14 @@ function hex7(hex) {
 
 // === Pad layout ===
 //
-// Bank A pads 1-4 (notes 36-39) are drum-style hits. We light them in
-// the role colour of the currently-selected voice (or default cyan).
-// Bank A pads 5-8 (notes 40-43) are transport: stop / play / record /
-// tap. Their colour reflects current playing/recording state.
-//
-// Bank B pads 1-8 (notes 44-51) are plant-mode selectors mirroring the
-// chip strip in the canvas tool palette. The active plant mode burns
-// brighter than the rest.
+// Bank A pads 1-4 (notes 36-39): drum surface. Lit in the role
+//   colour of the currently-selected voice (default cyan).
+// Bank A pads 5-8 (notes 40-43): the four "effect" plant modes —
+//   drop / muffle / thin / rise. Active mode burns brighter.
+//   (Transport is no longer on these pads — Shift+Play / Shift+Stop
+//   on the device sends MIDI Real-Time and is wired in input.js.)
+// Bank B pads 1-8 (notes 44-51): full plant-mode picker. Active
+//   mode burns brighter.
 
 const PLANT_MODE_COLORS = {
   drop:   '#ff4d80',
@@ -174,13 +188,21 @@ const PLANT_MODE_COLORS = {
   ripple: '#e8a8c8',
   cloud:  '#d0d8e8',
 };
+const PLANT_MODE_BANK_A_5_8 = ['drop', 'muffle', 'thin', 'rise'];
 const PLANT_MODE_BANK_B = ['drop', 'muffle', 'thin', 'rise', 'voice', 'weave', 'ripple', 'cloud'];
 
 export function paintAllPads() {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   paintBankA();
   paintBankB();
   paintTransport();
+}
+
+function paintPlantPad(id, kind) {
+  const isActive = state.plantMode === kind;
+  let [r, g, b] = hex7(PLANT_MODE_COLORS[kind] || '#ffffff');
+  if (!isActive) { r >>= 2; g >>= 2; b >>= 2; }
+  setLed(id, r, g, b);
 }
 
 function paintBankA() {
@@ -190,25 +212,16 @@ function paintBankA() {
   const baseHex = (seed && seed.kind === 'voice' && seed.color) ? seed.color : '#5fd2e8';
   const [r, g, b] = hex7(baseHex);
   for (let i = 0; i < 4; i++) {
-    // Pads 1-4 get the dim hue.
     setLed(PAD_ID_BANK_A[i], r >> 1, g >> 1, b >> 1);
   }
-  // Pads 5-8: transport markings — give them their own static palette
-  // so they read as functional, not as part of the drum row.
-  setLed(PAD_ID_BANK_A[4], ...hex7('#ffffff'));     // stop
-  setLed(PAD_ID_BANK_A[5], ...hex7('#5af095'));     // play
-  setLed(PAD_ID_BANK_A[6], ...hex7('#ff4d80'));     // record
-  setLed(PAD_ID_BANK_A[7], ...hex7('#ffd84d'));     // tap
+  // Pads 5-8: the four "effect" plant modes.
+  for (let i = 0; i < 4; i++) {
+    paintPlantPad(PAD_ID_BANK_A[i + 4], PLANT_MODE_BANK_A_5_8[i]);
+  }
 }
 
 function paintBankB() {
-  for (let i = 0; i < 8; i++) {
-    const kind = PLANT_MODE_BANK_B[i];
-    const isActive = state.plantMode === kind;
-    let [r, g, b] = hex7(PLANT_MODE_COLORS[kind] || '#ffffff');
-    if (!isActive) { r >>= 2; g >>= 2; b >>= 2; }
-    setLed(PAD_ID_BANK_B[i], r, g, b);
-  }
+  for (let i = 0; i < 8; i++) paintPlantPad(PAD_ID_BANK_B[i], PLANT_MODE_BANK_B[i]);
 }
 
 function paintTransport() {
@@ -219,18 +232,21 @@ function paintTransport() {
   setLed(TRANSPORT_TAP,    ...hex7('#1a3322'));
 }
 
-// Repaint just the bank-B strip + transport buttons when state changes
-// — cheaper than a full repaint, and lets us call this from many call
-// sites without worrying about cost.
+// Repaint pad lights when state changes. Touches bank A pads 5-8
+// (effect plant modes) and bank B (full plant-mode picker) + the
+// transport indicator LEDs. Bank A pads 1-4 don't change on plant-
+// mode or transport changes, only on selection — see
+// refreshSelectionLights for that case.
 export function refreshPadLights() {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
+  paintBankA();
   paintBankB();
   paintTransport();
 }
 
 // Selected seed changed — repaint bank A's role-colour drum pads too.
 export function refreshSelectionLights() {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   paintAllPads();
 }
 
@@ -279,7 +295,7 @@ function writeScreen(mode, transient, line1, line2, picP, picA, picE) {
 // BPM + guardrails state on line 2. Repaint whenever any of those
 // change.
 export function paintScreen() {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   const seed = seedById(state.selectedSeedId);
   let line1, line2;
   if (seed) {
@@ -310,7 +326,7 @@ export function paintScreen() {
 // `cc` identifies which control "owns" this popup so the device's
 // internal cache stays coherent.
 export function popupParam(cc, name, value) {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   const body = [
     0x04, 0x02, 0x60,
     0x1F, SCREEN_MODE_POPUP, 0x02, cc & 0x7F, 0x00,
@@ -328,7 +344,7 @@ export function popupParam(cc, name, value) {
 const POPUP_MODE_ENCODER = 0x03;
 const POPUP_MODE_FADER   = 0x04;
 export function popupGauge(mode, value7bit, line1, line2) {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   const body = [
     0x04, 0x02, 0x60,
     0x1F, mode & 0x7F, 0x01, value7bit & 0x7F, 0x00, 0x00,
@@ -353,6 +369,61 @@ export function popupFader  (value, line1, line2) { popupGauge(POPUP_MODE_FADER,
 // the 8 — Ableton's elements.py maps them, but we don't yet have the
 // list confirmed for the user's template. Use this once we have it).
 export function realignEncoder(encSysId, value7bit) {
-  if (!midiOut) return;
+  if (midiOuts.length === 0) return;
   sendRaw([0x21, 0x10, 0x00, encSysId & 0x7F, 0x00, value7bit & 0x7F]);
+}
+
+// === MIDI Real-Time output (Clock + Start/Stop) ===
+//
+// Sends 24-tick-per-beat MIDI Clock + Start/Stop to the MiniLab so
+// the on-device arpeggiator slaves to murmur's tempo. Without these
+// the arp runs at the device's own internal rate, which has no
+// relationship to murmur's BPM.
+//
+// Strategy: a setInterval polls every 25ms and schedules outgoing
+// clock ticks ~100ms ahead using Web MIDI's timestamped send. This
+// is the same lookahead pattern as the audio scheduler — it keeps
+// timing tight without needing a high-precision timer.
+//
+// Realtime messages are 1 byte (status only, no channel). They go to
+// `realtimeOut` (the main MIDI port), not to `midiOuts` (the DAW
+// port that handles SysEx). The MiniLab's arp listens on the main
+// port for Clock / Start / Stop.
+
+let clockTimer = null;
+let clockNextTickMs = 0;
+
+function sendRealtime(byte, timestamp) {
+  if (!realtimeOut) return;
+  try { realtimeOut.send([byte], timestamp); }
+  catch (e) { console.warn('[minilab] realtime send failed', e); }
+}
+
+export function startClockOut() {
+  if (!realtimeOut) return;
+  // 0xFA = Start. Tells the MiniLab arp to (re)start from step 1.
+  sendRealtime(0xFA);
+  clockNextTickMs = performance.now();
+  if (clockTimer) clearInterval(clockTimer);
+  clockTimer = setInterval(scheduleClockAhead, 25);
+}
+
+export function stopClockOut() {
+  if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+  // 0xFC = Stop. Tells the MiniLab arp to halt and reset.
+  sendRealtime(0xFC);
+}
+
+function scheduleClockAhead() {
+  if (!realtimeOut) return;
+  // 24 ticks per beat; tick interval in ms = (60 / BPM) / 24 * 1000.
+  // Read BPM each cycle so tempo changes (slider, tap, external)
+  // take effect within the 100ms lookahead window.
+  const tickMs = 60000 / BPM / 24;
+  const lookahead = 100;
+  const horizon = performance.now() + lookahead;
+  while (clockNextTickMs < horizon) {
+    sendRealtime(0xF8, clockNextTickMs);
+    clockNextTickMs += tickMs;
+  }
 }

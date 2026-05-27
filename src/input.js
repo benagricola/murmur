@@ -130,10 +130,16 @@ function setSustainPedal(down) {
 }
 
 // === Pad routing (MiniLab 3) ===
-// Pads sit on MIDI channel 10. Bank A pads 1-4 (notes 36-39) play
-// pitched live notes. Bank A pads 5-8 (notes 40-43) are transport
-// (the device labels them stop / play / rec / tap in DAW mode).
-// Bank B (notes 44-51) selects plant mode.
+// Pads sit on MIDI channel 10.
+//   Bank A pads 1-4 (notes 36-39): pitched live notes — finger-drum
+//     surface.
+//   Bank A pads 5-8 (notes 40-43): the four "effect" plant modes —
+//     drop / muffle / thin / rise. Quick-fire accents you can
+//     reach while drumming on pads 1-4. Transport is no longer on
+//     these pads — use Shift+Play / Shift+Stop on the device instead,
+//     both of which send MIDI Real-Time and are already wired.
+//   Bank B (notes 44-51): full plant-mode picker — same as before.
+const PAD_BANK_A_PLANT_5_8 = ['drop', 'muffle', 'thin', 'rise'];
 const PAD_BANK_B_TO_PLANT = [
   'drop',   // pad 1 (note 44)
   'muffle', // pad 2 (note 45)
@@ -419,12 +425,10 @@ function handleMIDIMessage(evt) {
   // Notes
   if (cmd === 0x90 && data[2] > 0) {
     const note = data[1], velocity = data[2];
-    // Bank A pads 5-8 = transport
+    // Bank A pads 5-8 = effect plant modes (drop / muffle / thin / rise)
     if (channel === 10 && note >= 40 && note <= 43) {
-      if (note === 40) transportStop();
-      else if (note === 41) transportPlay();
-      else if (note === 42) transportRecord();
-      else if (note === 43) transportTap();
+      const kind = PAD_BANK_A_PLANT_5_8[note - 40];
+      if (kind && setPlantModeFn) setPlantModeFn(kind);
       flashMidiLED();
       return;
     }

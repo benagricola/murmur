@@ -9,7 +9,9 @@ import {
   ensureAudio, audioCtx, supportsPeriodicWave,
   setMasterVol, showAudioStatus, onContextCreated,
 } from './audio/context.js';
-import { refreshPadLights, paintScreen } from './output/minilab3.js';
+import {
+  refreshPadLights, paintScreen, startClockOut, stopClockOut,
+} from './output/minilab3.js';
 
 // High-level tempo change — updates tempo state, then rescales every
 // seed's bar-fraction-derived timings (intervalMs, decay, attack, delay)
@@ -125,6 +127,7 @@ playBtn.addEventListener('click', async () => {
     playBtn.textContent = '▶ start';
     playBtn.classList.add('primary');
     showAudioStatus(ctx.state + ' · stopped');
+    stopClockOut();  // halt the MiniLab arpeggiator
     refreshPadLights(); paintScreen();
   } else {
     // START: ensure the context is running, then enable the
@@ -139,6 +142,7 @@ playBtn.addEventListener('click', async () => {
     }
     showAudioStatus(ctx.state + ' · playing' + (supportsPeriodicWave ? '' : ' · basic'),
                     ctx.state === 'running' ? 'ok' : '');
+    startClockOut();  // sync the MiniLab arpeggiator to murmur's tempo
     refreshPadLights(); paintScreen();
   }
 });
