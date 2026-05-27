@@ -254,12 +254,29 @@ function tracedSendRaw(bytes) {
 // instead. Logging the entire sendRaw stream would require a deeper
 // refactor; skipped here to keep the diagnostic surface minimal.
 
+// Stop the continuous clock-tick stream. Lets us test the hypothesis
+// that flooding the device's main port with F8 bytes is starving the
+// SysEx parser on the DAW port. Use:
+//   murmurStopClock()  — kill the tick stream
+//   murmurReconnect()  — re-run handshake + paint with no clock noise
+//   ...does the device now hold the colours?
+function killClock() {
+  stopClockTimer();
+  console.log('[diag] clock stream stopped. Re-run murmurReconnect() to retest LED paint without clock noise.');
+}
+function startClock() {
+  ensureClockTimer();
+  console.log('[diag] clock stream resumed.');
+}
+
 if (typeof window !== 'undefined') {
   window.murmurDescribePorts = describePorts;
   window.murmurPaintOne = paintOne;
   window.murmurPaintTransport = paintTransportPad;
   window.murmurReconnect = reconnect;
   window.murmurSysexLog = setSysexLogging;
+  window.murmurStopClock = killClock;
+  window.murmurStartClock = startClock;
 }
 
 // Mode-switch diagnostics — DevTools-callable. From the SysEx
