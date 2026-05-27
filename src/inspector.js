@@ -195,20 +195,26 @@ export function selectSeed(id) {
       }
     );
   } else {
-    document.querySelector('#rhythm-row label').textContent = 'rhythm';
+    // This picker sets how long each pattern STEP plays for — it
+    // stretches or compresses the whole pattern, it doesn't change
+    // the rhythmic shape (that's stored in the pattern itself, hit
+    // vs rest per step). Labelled "step length" to match what it
+    // actually does. Recorded loops default to 1/16 (the recording
+    // grid); changing it scales them faster or slower.
+    document.querySelector('#rhythm-row label').textContent = 'step length';
     buildPicker(
       document.getElementById('rhythm-picker'),
       RHYTHM_OPTIONS,
       (opt) => {
         seed.intervalMs = opt.ms;
-        seed.intervalFrac = opt.frac;   // canonical bar-fraction storage
+        seed.intervalFrac = opt.frac;
         // Force scheduler to re-anchor patternIdx at the new
-        // baseInterval. Without this, patternIdx (monotonic) points
-        // to a step whose fire time is now far in the future at the
-        // new (often slower) interval, so the seed goes silent.
+        // baseInterval. Without this, patternIdx (monotonic) would
+        // point to a fireTime far in the future at the new (often
+        // slower) interval and the seed would go silent.
         seed.nextTrigger = 0;
         updatePatternLoopInfo(seed);
-        takeSnapshotFn('tweaked rhythm');
+        takeSnapshotFn('step length: ' + opt.label);
       },
       () => nearestOptionIdx(RHYTHM_OPTIONS, seed.intervalMs)
     );
