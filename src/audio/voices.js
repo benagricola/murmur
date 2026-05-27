@@ -15,132 +15,219 @@
 
 import { audioCtx, setOscWave, createNoiseBuffer } from './context.js';
 
+// === VOICE REGISTRY ===
+//
+// Each voice is a `{ params, build }` pair:
+//   - `params`: declarative schema describing every tunable parameter
+//     this voice accepts, with type / range / default. The future
+//     spatial-design controller introspects this to render appropriate
+//     controls automatically; role generators in timbres.js consult it
+//     to constrain random rolls. Schema types:
+//       'enum'     — values: [...], default: 'x'
+//       'linear'   — min, max, default (linear scale)
+//       'log'      — min, max, default (logarithmic — for frequencies)
+//   - `build(audioCtx, freq, when, params)`: constructs the audio graph
+//     and returns a handle:
+//       { output, stop, detune, liveParams? }
+//     `output` is the voice's raw signal (no envelope).
+//     `stop(when)` schedules teardown.
+//     `detune(cents, t)` ramps pitch bend (null if the voice ignores it).
+//     `liveParams` (optional) is a flat map of AudioParam refs the
+//     caller can modulate via setTargetAtTime DURING the note. Voices
+//     that have no live-modulatable surface (drums) return undefined.
+//
+// Build functions can be called as `VOICES[name].build(...)`. The
+// existing `VOICES[name]` indirection in playPatch reads the .build
+// member.
+
 export const VOICES = {};
 
-VOICES.additive = function(audioCtx, freq, when, params) {
-  const harmonics = params.harmonics || [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
-  const osc = audioCtx.createOscillator();
-  const out = audioCtx.createGain();
-  setOscWave(osc, harmonics);
-  osc.frequency.value = freq;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = Math.min(8000, freq * (params.filterMult || 16));
-  filter.Q.value = params.Q != null ? params.Q : 0.7;
-  osc.connect(filter); filter.connect(out);
-  osc.start(when);
-  return {
-    output: out,
-    stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
-    detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
-  };
+VOICES.additive = {
+  params: {
+    harmonics: { type: 'array', size: 12, min: 0, max: 1, default: [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0] },
+    filterMult: { type: 'log', min: 2, max: 32, default: 16 },
+    Q: { type: 'linear', min: 0.1, max: 8, default: 0.7 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const harmonics = params.harmonics || [0.4, 0.2, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0];
+    const osc = audioCtx.createOscillator();
+    const out = audioCtx.createGain();
+    setOscWave(osc, harmonics);
+    osc.frequency.value = freq;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = Math.min(8000, freq * (params.filterMult || 16));
+    filter.Q.value = params.Q != null ? params.Q : 0.7;
+    osc.connect(filter); filter.connect(out);
+    osc.start(when);
+    return {
+      output: out,
+      stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
+      detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
+      liveParams: { cutoff: filter.frequency, Q: filter.Q },
+    };
+  },
 };
 
-VOICES.subtractive = function(audioCtx, freq, when, params) {
-  const osc = audioCtx.createOscillator();
-  const out = audioCtx.createGain();
-  osc.type = params.wave || 'sawtooth';
-  osc.frequency.value = freq;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.Q.value = params.Q != null ? params.Q : 6;
-  const startHz = Math.max(80, params.filterStartHz || Math.min(8000, freq * 12));
-  const endHz = Math.max(80, params.filterEndHz || Math.min(2000, freq * 3));
-  const decayMs = params.filterDecayMs || 350;
-  filter.frequency.setValueAtTime(startHz, when);
-  filter.frequency.exponentialRampToValueAtTime(endHz, when + decayMs / 1000);
-  osc.connect(filter); filter.connect(out);
-  osc.start(when);
-  return {
-    output: out,
-    stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
-    detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
-  };
+VOICES.subtractive = {
+  params: {
+    wave: { type: 'enum', values: ['sawtooth', 'square', 'triangle', 'sine'], default: 'sawtooth' },
+    filterStartHz: { type: 'log', min: 200, max: 8000, default: 2000 },
+    filterEndHz: { type: 'log', min: 80, max: 4000, default: 600 },
+    filterDecayMs: { type: 'log', min: 50, max: 2000, default: 350 },
+    Q: { type: 'linear', min: 0.5, max: 18, default: 6 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const osc = audioCtx.createOscillator();
+    const out = audioCtx.createGain();
+    osc.type = params.wave || 'sawtooth';
+    osc.frequency.value = freq;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = params.Q != null ? params.Q : 6;
+    const startHz = Math.max(80, params.filterStartHz || Math.min(8000, freq * 12));
+    const endHz = Math.max(80, params.filterEndHz || Math.min(2000, freq * 3));
+    const decayMs = params.filterDecayMs || 350;
+    filter.frequency.setValueAtTime(startHz, when);
+    filter.frequency.exponentialRampToValueAtTime(endHz, when + decayMs / 1000);
+    osc.connect(filter); filter.connect(out);
+    osc.start(when);
+    return {
+      output: out,
+      stop: (whenStop) => { try { osc.stop(whenStop); } catch (e) {} },
+      detune: (cents, t) => { try { osc.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {} },
+      // cutoff and Q are live-modulatable. Note: cutoff has scheduled
+      // automation from setValueAtTime/exponentialRampToValueAtTime
+      // for the filter sweep; live modulation should use
+      // cancelScheduledValues + setTargetAtTime to override cleanly.
+      liveParams: { cutoff: filter.frequency, Q: filter.Q },
+    };
+  },
 };
 
-VOICES.fm = function(audioCtx, freq, when, params) {
-  const ratio = params.ratio != null ? params.ratio : 2;
-  const modIndexStart = params.modIndexStart != null ? params.modIndexStart : 2;
-  const modIndexEnd = params.modIndexEnd != null ? params.modIndexEnd : 0.4;
-  const decayMs = params.modDecayMs || 400;
-  const carrier = audioCtx.createOscillator();
-  const mod = audioCtx.createOscillator();
-  const modGain = audioCtx.createGain();
-  const out = audioCtx.createGain();
-  carrier.type = 'sine';
-  mod.type = 'sine';
-  carrier.frequency.value = freq;
-  mod.frequency.value = freq * ratio;
-  modGain.gain.setValueAtTime(freq * modIndexStart, when);
-  modGain.gain.exponentialRampToValueAtTime(Math.max(0.01, freq * modIndexEnd), when + decayMs / 1000);
-  mod.connect(modGain);
-  modGain.connect(carrier.frequency);
-  carrier.connect(out);
-  mod.start(when);
-  carrier.start(when);
-  return {
-    output: out,
-    stop: (whenStop) => {
-      try { mod.stop(whenStop); } catch (e) {}
-      try { carrier.stop(whenStop); } catch (e) {}
-    },
-    detune: (cents, t) => {
-      try { carrier.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
-      try { mod.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
-    },
-  };
+VOICES.fm = {
+  params: {
+    ratio: { type: 'log', min: 0.25, max: 8, default: 2 },
+    modIndexStart: { type: 'linear', min: 0.1, max: 12, default: 2 },
+    modIndexEnd: { type: 'linear', min: 0.05, max: 4, default: 0.4 },
+    modDecayMs: { type: 'log', min: 50, max: 2000, default: 400 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const ratio = params.ratio != null ? params.ratio : 2;
+    const modIndexStart = params.modIndexStart != null ? params.modIndexStart : 2;
+    const modIndexEnd = params.modIndexEnd != null ? params.modIndexEnd : 0.4;
+    const decayMs = params.modDecayMs || 400;
+    const carrier = audioCtx.createOscillator();
+    const mod = audioCtx.createOscillator();
+    const modGain = audioCtx.createGain();
+    const out = audioCtx.createGain();
+    carrier.type = 'sine';
+    mod.type = 'sine';
+    carrier.frequency.value = freq;
+    mod.frequency.value = freq * ratio;
+    modGain.gain.setValueAtTime(freq * modIndexStart, when);
+    modGain.gain.exponentialRampToValueAtTime(Math.max(0.01, freq * modIndexEnd), when + decayMs / 1000);
+    mod.connect(modGain);
+    modGain.connect(carrier.frequency);
+    carrier.connect(out);
+    mod.start(when);
+    carrier.start(when);
+    return {
+      output: out,
+      stop: (whenStop) => {
+        try { mod.stop(whenStop); } catch (e) {}
+        try { carrier.stop(whenStop); } catch (e) {}
+      },
+      detune: (cents, t) => {
+        try { carrier.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
+        try { mod.detune.setTargetAtTime(cents, t, 0.005); } catch (e) {}
+      },
+      // modIndex (modGain.gain) is the most musically expressive live
+      // param — it controls FM brightness / harmonic content. modFreq
+      // (mod.frequency) controls the ratio; ramping it produces a
+      // sweep through ratios. Both exposed for spatial control.
+      liveParams: { modIndex: modGain.gain, modFreq: mod.frequency },
+    };
+  },
 };
 
-VOICES.supersaw = function(audioCtx, freq, when, params) {
-  const voiceCount = params.voices || 3;
-  const spread = params.detuneCents != null ? params.detuneCents : 7;
-  const sum = audioCtx.createGain();
-  const oscs = [];
-  for (let i = 0; i < voiceCount; i++) {
-    const o = audioCtx.createOscillator();
-    o.type = 'sawtooth';
-    o.frequency.value = freq;
-    const baseDetune = (i - (voiceCount - 1) / 2) * spread;
-    o.detune.value = baseDetune;
-    const og = audioCtx.createGain();
-    og.gain.value = 1 / voiceCount;
-    o.connect(og); og.connect(sum);
-    o.start(when);
-    oscs.push({ osc: o, baseDetune });
-  }
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = Math.min(8000, freq * (params.filterMult || 10));
-  filter.Q.value = params.Q != null ? params.Q : 0.5;
-  const out = audioCtx.createGain();
-  sum.connect(filter); filter.connect(out);
-  return {
-    output: out,
-    stop: (whenStop) => { for (const { osc } of oscs) { try { osc.stop(whenStop); } catch (e) {} } },
-    detune: (cents, t) => {
-      for (const { osc, baseDetune } of oscs) {
-        try { osc.detune.setTargetAtTime(cents + baseDetune, t, 0.005); } catch (e) {}
-      }
-    },
-  };
+VOICES.supersaw = {
+  params: {
+    voices: { type: 'integer', min: 1, max: 7, default: 3 },
+    detuneCents: { type: 'linear', min: 0, max: 35, default: 7 },
+    filterMult: { type: 'log', min: 2, max: 32, default: 10 },
+    Q: { type: 'linear', min: 0.1, max: 8, default: 0.5 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const voiceCount = params.voices || 3;
+    const spread = params.detuneCents != null ? params.detuneCents : 7;
+    const sum = audioCtx.createGain();
+    const oscs = [];
+    for (let i = 0; i < voiceCount; i++) {
+      const o = audioCtx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = freq;
+      const baseDetune = (i - (voiceCount - 1) / 2) * spread;
+      o.detune.value = baseDetune;
+      const og = audioCtx.createGain();
+      og.gain.value = 1 / voiceCount;
+      o.connect(og); og.connect(sum);
+      o.start(when);
+      oscs.push({ osc: o, baseDetune });
+    }
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = Math.min(8000, freq * (params.filterMult || 10));
+    filter.Q.value = params.Q != null ? params.Q : 0.5;
+    const out = audioCtx.createGain();
+    sum.connect(filter); filter.connect(out);
+    return {
+      output: out,
+      stop: (whenStop) => { for (const { osc } of oscs) { try { osc.stop(whenStop); } catch (e) {} } },
+      detune: (cents, t) => {
+        for (const { osc, baseDetune } of oscs) {
+          try { osc.detune.setTargetAtTime(cents + baseDetune, t, 0.005); } catch (e) {}
+        }
+      },
+      // Filter live-modulatable. Detune-cents would require ramping
+      // every osc; expose as a function rather than an AudioParam.
+      liveParams: {
+        cutoff: filter.frequency,
+        Q: filter.Q,
+        setDetune: (cents, t) => {
+          for (const { osc, baseDetune } of oscs) {
+            try { osc.detune.setTargetAtTime(baseDetune * (cents / 7), t, 0.005); } catch (e) {}
+          }
+        },
+      },
+    };
+  },
 };
 
-VOICES.noise = function(audioCtx, freq, when, params) {
-  const noise = audioCtx.createBufferSource();
-  noise.buffer = createNoiseBuffer(2.0);
-  noise.loop = true;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = params.filterType || 'bandpass';
-  filter.frequency.value = Math.max(80, params.bandHz || Math.min(6000, freq * (params.bandMult || 4)));
-  filter.Q.value = params.Q != null ? params.Q : 1.5;
-  const out = audioCtx.createGain();
-  noise.connect(filter); filter.connect(out);
-  noise.start(when);
-  return {
-    output: out,
-    stop: (whenStop) => { try { noise.stop(whenStop); } catch (e) {} },
-    detune: null,
-  };
+VOICES.noise = {
+  params: {
+    bandHz: { type: 'log', min: 80, max: 12000, default: 2000 },
+    Q: { type: 'linear', min: 0.3, max: 8, default: 1.5 },
+    filterType: { type: 'enum', values: ['lowpass', 'bandpass', 'highpass'], default: 'bandpass' },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = createNoiseBuffer(2.0);
+    noise.loop = true;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = params.filterType || 'bandpass';
+    filter.frequency.value = Math.max(80, params.bandHz || Math.min(6000, freq * (params.bandMult || 4)));
+    filter.Q.value = params.Q != null ? params.Q : 1.5;
+    const out = audioCtx.createGain();
+    noise.connect(filter); filter.connect(out);
+    noise.start(when);
+    return {
+      output: out,
+      stop: (whenStop) => { try { noise.stop(whenStop); } catch (e) {} },
+      detune: null,
+      liveParams: { cutoff: filter.frequency, Q: filter.Q },
+    };
+  },
 };
 
 // === Drum voices ===
@@ -185,7 +272,22 @@ function softClip(audioCtx) {
 //      slower than the body, giving the speakers a chance to actually
 //      reproduce the low-end weight.
 // Routed through a soft-clip waveshaper for harmonic warmth.
-VOICES.kick = function(audioCtx, freq, when, params) {
+VOICES.kick = {
+  params: {
+    // Drum voices' params currently don't drive externally — values
+    // are mostly hard-coded inside the builder for the punchy stack.
+    // Documented here so future spatial-drum work has the surface to
+    // hook into. Each region of the future kick design canvas would
+    // map to one of these.
+    bodyStartHz:    { type: 'log',    min: 40,  max: 200, default: 85 },
+    bodyEndHz:      { type: 'log',    min: 25,  max: 100, default: 40 },
+    bodyDecayMs:    { type: 'log',    min: 30,  max: 500, default: 70 },
+    clickAmount:    { type: 'linear', min: 0,   max: 1.5, default: 0.55 },
+    subAmount:      { type: 'linear', min: 0,   max: 1.5, default: 0.85 },
+    subHz:          { type: 'log',    min: 20,  max: 60,  default: 38 },
+    subDecayMs:     { type: 'log',    min: 100, max: 800, default: 400 },
+  },
+  build: function(audioCtx, freq, when, params) {
   const out = audioCtx.createGain();
   const clip = softClip(audioCtx);
   const preClip = audioCtx.createGain();
@@ -240,6 +342,7 @@ VOICES.kick = function(audioCtx, freq, when, params) {
     },
     detune: null,
   };
+  },
 };
 
 // === SNARE ===
@@ -248,7 +351,16 @@ VOICES.kick = function(audioCtx, freq, when, params) {
 //   2. Body — bandpassed noise centred ~400-600 Hz (the wood/shell)
 //   3. Crack — highpassed noise above 4kHz (the snare wires)
 // Light saturation through soft clip for cohesion.
-VOICES.snare = function(audioCtx, freq, when, params) {
+VOICES.snare = {
+  params: {
+    pingHz:       { type: 'log',    min: 100, max: 400, default: 200 },
+    pingAmount:   { type: 'linear', min: 0,   max: 1.5, default: 0.65 },
+    bodyCutHz:    { type: 'log',    min: 200, max: 1500, default: 480 },
+    bodyDecayMs:  { type: 'log',    min: 20,  max: 300, default: 80 },
+    crackHpHz:    { type: 'log',    min: 1500, max: 8000, default: 3800 },
+    crackDecayMs: { type: 'log',    min: 30,  max: 400, default: 140 },
+  },
+  build: function(audioCtx, freq, when, params) {
   const out = audioCtx.createGain();
   const clip = softClip(audioCtx);
   const preClip = audioCtx.createGain();
@@ -305,6 +417,7 @@ VOICES.snare = function(audioCtx, freq, when, params) {
     },
     detune: null,
   };
+  },
 };
 
 // === HIHAT ===
@@ -316,7 +429,16 @@ VOICES.snare = function(audioCtx, freq, when, params) {
 // params.open: true → longer decay (open hat ~250ms), false → snappy
 // closed hat ~50ms. Generators in timbres.js can roll either.
 const HAT_RATIOS = [2.0, 3.0, 4.16, 5.43, 6.79, 8.21];   // 808-style
-VOICES.hihat = function(audioCtx, freq, when, params) {
+VOICES.hihat = {
+  params: {
+    open:        { type: 'boolean', default: false },
+    metalBaseHz: { type: 'log',     min: 200, max: 500, default: 320 },
+    bpfHz:       { type: 'log',     min: 4000, max: 12000, default: 7000 },
+    bpfQ:        { type: 'linear',  min: 0.5,  max: 4,    default: 1.5 },
+    hpfHz:       { type: 'log',     min: 4000, max: 10000, default: 6000 },
+    noiseHpfHz:  { type: 'log',     min: 4000, max: 12000, default: 7500 },
+  },
+  build: function(audioCtx, freq, when, params) {
   const open = params.open === true;
   const decayMs = open ? 250 : 50;
   const out = audioCtx.createGain();
@@ -367,6 +489,7 @@ VOICES.hihat = function(audioCtx, freq, when, params) {
     },
     detune: null,
   };
+  },
 };
 
 // playPatch — single dispatcher for all note-making in murmur. Builds
@@ -466,14 +589,22 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
   const voices = [];
   const detunes = [];
   for (const layer of patch.layers) {
-    const fn = VOICES[layer.voice];
-    if (!fn) continue;
+    const entry = VOICES[layer.voice];
+    if (!entry || !entry.build) continue;
     const params = layer.params || {};
-    const v = fn(audioCtx, freq, when, params);
+    const v = entry.build(audioCtx, freq, when, params);
     const lg = audioCtx.createGain();
     lg.gain.value = layer.gain != null ? layer.gain : 1.0;
     v.output.connect(lg);
     lg.connect(summer);
+    // Annotate the voice handle with the layer config so spatial
+    // controllers can find params by layer name. `layerGain` is the
+    // gain node between voice.output and summer — modulating it
+    // changes that layer's contribution to the mix (region distance
+    // ↔ mix weight in the spatial design model).
+    v.layerVoice = layer.voice;
+    v.layerGain = lg.gain;
+    v.layerParams = params;
     voices.push(v);
     if (v.detune) detunes.push(v.detune);
   }
@@ -499,6 +630,8 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
       release: () => { activeNotes.delete(entry); },
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
       output: env,
+      voices,         // expose for spatial-design live modulation
+      env: env.gain,  // patch-level envelope param
     };
   }
 
@@ -521,6 +654,8 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
       release: () => { activeNotes.delete(entry); },
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
       output: env,
+      voices,         // expose for spatial-design live modulation
+      env: env.gain,  // patch-level envelope param
     };
   }
   if (debug) console.log('[playPatch] LIVE mode (no sustainMs) — caller must invoke release()', { layers: voices.length });
@@ -568,5 +703,7 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     },
     detune: (cents, t) => { for (const d of detunes) d(cents, t); },
     output: env,
+    voices,         // expose for spatial-design live modulation
+    env: env.gain,  // patch-level envelope param
   };
 }

@@ -27,6 +27,7 @@ import './audio/context.js';
 import './audio/voices.js';
 import './audio/chains.js';
 import './audio/events.js';
+import './audio/drum-kit.js';
 
 import './seeds.js';
 import './scheduler.js';
