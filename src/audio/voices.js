@@ -381,6 +381,77 @@ function audioDebugEnabled() {
   return typeof window !== 'undefined' && window.murmurAudioDebug;
 }
 
+// === Note registry + safety sweep ===
+//
+// Every playPatch call registers an entry here with an expected
+// stop time. A 200ms timer sweeps for entries whose expected stop
+// is now in the past plus a grace period, and force-disconnects the
+// output node to silence them. This catches the entire "stuck note"
+// class:
+//   - live notes whose release() was never called (sustain stuck on)
+//   - voices whose internal v.stop() failed silently
+//   - long release envelopes that overstay their welcome
+//
+// The grace period is generous (1.5 s past expected stop) so legit
+// release tails finish naturally. Anything still alive past that is
+// genuinely stuck and gets pulled.
+//
+// Live mode entries use a 30s expected stop initially; release()
+// updates that to the actual ramp end time.
+const activeNotes = new Set();
+const SAFETY_GRACE_SEC = 1.5;
+const SAFETY_SWEEP_MS = 200;
+const LIVE_NOTE_MAX_LIFETIME_SEC = 30;
+
+function registerNote(entry) {
+  activeNotes.add(entry);
+  return entry;
+}
+
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    for (const entry of activeNotes) {
+      if (now > entry.expectedStopTime + SAFETY_GRACE_SEC) {
+        const overdue = (now - entry.expectedStopTime).toFixed(2);
+        console.warn(`[safety] force-stopping ${entry.source} note overdue by ${overdue}s`);
+        try {
+          if (entry.output) entry.output.disconnect();
+        } catch (e) {}
+        try {
+          if (entry.voices) for (const v of entry.voices) { try { v.stop(now); } catch (e) {} }
+        } catch (e) {}
+        activeNotes.delete(entry);
+      }
+    }
+  }, SAFETY_SWEEP_MS);
+}
+
+// DevTools handle for inspecting / clearing the registry.
+if (typeof window !== 'undefined') {
+  window.murmurActiveNotes = () => {
+    if (!audioCtx) return [];
+    const now = audioCtx.currentTime;
+    return [...activeNotes].map(e => ({
+      source: e.source,
+      ageSec: +(now - e.startedAt).toFixed(2),
+      expectedStopInSec: +(e.expectedStopTime - now).toFixed(2),
+    }));
+  };
+  window.murmurForceClearNotes = () => {
+    const n = activeNotes.size;
+    for (const entry of activeNotes) {
+      try { if (entry.output) entry.output.disconnect(); } catch (e) {}
+      try {
+        if (entry.voices) for (const v of entry.voices) { try { v.stop(audioCtx.currentTime); } catch (e) {} }
+      } catch (e) {}
+    }
+    activeNotes.clear();
+    console.log(`[safety] force-cleared ${n} active notes`);
+  };
+}
+
 export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
   if (!audioCtx) return null;
   if (!patch || !patch.layers || patch.layers.length === 0) {
@@ -417,8 +488,15 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     const stopAt = when + (sustainMs ? sustainMs / 1000 : 0.5);
     for (const v of voices) v.stop(stopAt + 0.1);
     if (debug) console.log('[playPatch] one-shot', { layers: voices.length, sustainMs, stopAt: stopAt - when });
+    const entry = registerNote({
+      source: 'one-shot',
+      startedAt: when,
+      expectedStopTime: stopAt + 0.5,    // drum tail
+      output: env,
+      voices,
+    });
     return {
-      release: () => {},
+      release: () => { activeNotes.delete(entry); },
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
       output: env,
     };
@@ -432,22 +510,27 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     env.gain.linearRampToValueAtTime(0, when + a + sustainSec + r);
     for (const v of voices) v.stop(when + a + sustainSec + r + 0.05);
     if (debug) console.log('[playPatch] scheduled', { layers: voices.length, sustainMs, attack: a*1000, release: r*1000, totalMs: (a+sustainSec+r)*1000 });
+    const entry = registerNote({
+      source: 'scheduled',
+      startedAt: when,
+      expectedStopTime: when + a + sustainSec + r + 0.05,
+      output: env,
+      voices,
+    });
     return {
-      release: () => {},
+      release: () => { activeNotes.delete(entry); },
       detune: (cents, t) => { for (const d of detunes) d(cents, t); },
       output: env,
     };
   }
   if (debug) console.log('[playPatch] LIVE mode (no sustainMs) — caller must invoke release()', { layers: voices.length });
 
-  // Live mode: attack then sustain indefinitely; caller invokes release()
+  // Live mode: attack then sustain indefinitely; caller invokes release().
   env.gain.setValueAtTime(0, when);
   env.gain.linearRampToValueAtTime(gain, when + a);
 
-  // OscillatorNode.stop() is documented as "if called previously,
-  // has no effect" — so the FIRST call to stop wins. Guard with a
-  // flag so the safety-net timer doesn't pre-empt a legitimate
-  // release call.
+  // OscillatorNode.stop() is "first call wins" per spec — guard so
+  // the registry sweep can't double-stop a legitimately released voice.
   let stopFired = false;
   const tryStop = (at) => {
     if (stopFired) return;
@@ -457,21 +540,21 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
     }
   };
 
-  // Safety net: even if the caller forgets to call release (or there's
-  // a bug upstream), force-stop every voice after 30 seconds. No
-  // legitimate live-keyboard note should be held that long, and the
-  // alternative is oscillators that linger forever.
-  const SAFETY_STOP_SECONDS = 30;
-  const safetyTimer = setTimeout(() => {
-    if (!stopFired) {
-      console.warn('[playPatch] safety-net stop firing after 30s — release() was never called');
-      tryStop(audioCtx.currentTime + 0.05);
-    }
-  }, SAFETY_STOP_SECONDS * 1000);
+  // Live notes register with a generous initial expectedStopTime
+  // (now + LIVE_NOTE_MAX_LIFETIME_SEC). The release() call below
+  // updates that to the actual ramp-end time. The shared sweep timer
+  // catches anything still alive past expectedStopTime + grace —
+  // replaces the per-call setTimeout safety net.
+  const liveEntry = registerNote({
+    source: 'live',
+    startedAt: when,
+    expectedStopTime: audioCtx.currentTime + LIVE_NOTE_MAX_LIFETIME_SEC,
+    output: env,
+    voices,
+  });
 
   return {
     release: (whenRelease) => {
-      clearTimeout(safetyTimer);
       const g = env.gain;
       try {
         if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(whenRelease);
@@ -479,6 +562,9 @@ export function playPatch(patch, when, freq, gain, sustainMs, routeFn) {
       } catch (e) {}
       try { g.linearRampToValueAtTime(0, whenRelease + r); } catch (e) {}
       tryStop(whenRelease + r + 0.05);
+      // Shorten the safety deadline so the sweep cleans this entry up
+      // as soon as the release tail completes, not 30s later.
+      liveEntry.expectedStopTime = whenRelease + r + 0.05;
     },
     detune: (cents, t) => { for (const d of detunes) d(cents, t); },
     output: env,
