@@ -500,6 +500,22 @@ patternEditorEl.addEventListener('pointerdown', (e) => {
   const seed = seedById(state.selectedSeedId);
   if (!seed) return;
   const idx = parseInt(e.target.dataset.idx);
+  const step = seed.pattern[idx];
+  // Click a rest dot → activate it as a hit at default velocity.
+  // User can then drag to set pitch as normal. To turn a hit back
+  // into a rest, drag its bar to the bottom in the velocity-curve
+  // editor below. Shift+click flips a hit back to a rest in-place.
+  if (e.shiftKey && step.velocity >= 0.05) {
+    step.velocity = 0;
+    renderPatternEditor(seed);
+    renderVelocityEditor(seed);
+    takeSnapshotFn('rested step');
+    e.preventDefault();
+    return;
+  }
+  if (step.velocity < 0.05) {
+    step.velocity = 0.85;
+  }
   patternDrag = { seed, idx, rect: patternEditorEl.getBoundingClientRect() };
   updatePatternFromMouse(e);
   e.preventDefault();
@@ -524,6 +540,9 @@ function updatePatternFromMouse(e) {
     }
   }
   renderPatternEditor(patternDrag.seed);
+  // Keep the velocity-curve view in sync — turning a rest into a hit
+  // changes the bar height there too.
+  renderVelocityEditor(patternDrag.seed);
 }
 
 document.getElementById('insp-close').addEventListener('click', () => {
