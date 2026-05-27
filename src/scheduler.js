@@ -54,7 +54,12 @@ export function playSeedStep(seed, when) {
   }
   const stepIdx = seed.patternIdx % seed.pattern.length;
   const step = seed.pattern[stepIdx];
-  seed.patternIdx = stepIdx + 1;
+  // Monotonic increment (no modulo here). Pattern lookup wraps via
+  // modulo on read. Keeping patternIdx monotonic is what lets the
+  // master beat clock formula (see stepFireOffset below) compute each
+  // step's fire time fresh from playbackStartTime, never accumulating
+  // drift across thousands of steps.
+  seed.patternIdx++;
   const delayMs = Math.max(0, (when - audioCtx.currentTime) * 1000);
   setTimeout(() => {
     seed.currentStep = stepIdx;
@@ -122,6 +127,23 @@ export function playSeedStep(seed, when) {
   }
 }
 
+// Master beat clock — fire-time offset from playbackStartTime for
+// step N of a seed, given its baseInterval (seconds) and swing
+// (0.5 = straight, > 0.5 = late offbeat). Computed fresh per step
+// instead of incrementally accumulated, so floating-point drift
+// can't pile up over a long session and seeds at the same rhythm
+// stay perfectly locked to each other forever.
+//
+// Derivation: even step k fires at k*baseInterval. Odd step k fires
+// at k*baseInterval + (2*swing - 1)*baseInterval (the offbeat shift).
+// Identity check: for swing=0.5 both branches collapse to k*bI; for
+// swing=0.75 odd steps land 1.5*bI after the previous even step, as
+// the old incremental code did.
+function stepFireOffset(stepIdx, baseInterval, swing) {
+  const offbeat = (stepIdx % 2 === 1) ? (2 * swing - 1) * baseInterval : 0;
+  return stepIdx * baseInterval + offbeat;
+}
+
 export function scheduleAhead() {
   if (!audioCtx || !state.isPlaying) return;
   const now = audioCtx.currentTime;
@@ -140,31 +162,44 @@ export function scheduleAhead() {
         if (m.modifierKind === 'weave' && m.swing) swing = m.swing;
       }
     }
-    if (!seed.nextTrigger || seed.nextTrigger < now - 1) {
+
+    // Catch-up logic: if we're way behind (just started / playback
+    // start was moved), advance patternIdx to the next slot. For
+    // quantized seeds, snap to the grid boundary; for free-running
+    // seeds, anchor patternIdx to "as close to now as the formula
+    // allows" by computing what step would fire next.
+    if (seed.nextTrigger && seed.nextTrigger < now - 1) {
       if (seed.quantize) {
-        const sincePlaybackStart = now - state.playbackStartTime;
-        const nextSlot = Math.ceil(sincePlaybackStart / baseInterval) * baseInterval;
-        seed.nextTrigger = state.playbackStartTime + nextSlot;
+        const since = now - state.playbackStartTime;
+        seed.patternIdx = Math.max(0, Math.ceil(since / baseInterval));
       } else {
-        seed.nextTrigger = now + 0.04;
+        // Free-running: re-anchor playbackStartTime so step
+        // `patternIdx` fires ~now. This is the equivalent of the old
+        // `nextTrigger = now + 0.04` snap.
+        state.playbackStartTime = now + 0.04 - stepFireOffset(seed.patternIdx, baseInterval, swing);
       }
     }
-    while (seed.nextTrigger < now + lookahead) {
-      const stepBeforePlay = seed.patternIdx % seed.pattern.length;
+
+    // Schedule every step whose fire time falls inside our lookahead
+    // window. fireTime is derived fresh from patternIdx each loop —
+    // no incremental accumulation, no drift.
+    while (true) {
+      const fireTime = state.playbackStartTime + stepFireOffset(seed.patternIdx, baseInterval, swing);
+      if (fireTime >= now + lookahead) {
+        seed.nextTrigger = fireTime;  // kept for diagnostic / catch-up logic
+        break;
+      }
+      if (fireTime < now - 1) {
+        // Edge case: a single step is more than 1s in the past.
+        // Skip past it without playing — happens on tab-throttle return.
+        seed.patternIdx++;
+        continue;
+      }
       if (!seed.muted) {
-        playSeedStep(seed, seed.nextTrigger);
+        playSeedStep(seed, fireTime);
       } else {
-        seed.patternIdx = (seed.patternIdx + 1) % Math.max(1, seed.pattern.length);
+        seed.patternIdx++;
       }
-      let intervalToNext;
-      if (Math.abs(swing - 0.5) < 0.01) {
-        intervalToNext = baseInterval;
-      } else if (stepBeforePlay % 2 === 0) {
-        intervalToNext = swing * 2 * baseInterval;
-      } else {
-        intervalToNext = (1 - swing) * 2 * baseInterval;
-      }
-      seed.nextTrigger += intervalToNext;
     }
   }
 }
