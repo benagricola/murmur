@@ -22,7 +22,8 @@ import {
 } from './audio/events.js';
 import { seeds, activeEvents, state, seedById } from './state.js';
 import {
-  SVGNS, seedNodes, blobPath, renderSeed,
+  SVGNS, seedNodes, blobPath, renderSeed, renderTethers,
+  auraIntensityForSeed,
 } from './seeds.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 
@@ -178,15 +179,31 @@ export function scheduleAhead() {
     if (seed.kind !== 'voice') continue;
     let baseInterval = seed.intervalMs / 1000;
     let swing = 0.5;
-    // Iterate all capturing modifiers. Polyrhythm scales interval,
-    // weave sets swing. Multiple polys multiply; last weave wins.
-    if (seed.capturedByIds && seed.capturedByIds.size > 0) {
-      for (const id of seed.capturedByIds) {
-        const m = seedById(id);
-        if (!m) continue;
-        if (m.modifierKind === 'poly' && m.polyFactor) baseInterval *= m.polyFactor;
-        if (m.modifierKind === 'weave' && m.swing) swing = m.swing;
+    // Proximity-graded aura effects. Walk every modifier on the canvas,
+    // compute its intensity at this seed's position (0 at edge / outside,
+    // up to 1 at the centre — modulated by the aura's falloff curve and
+    // edge/centre intensity values). Apply each effect scaled by its
+    // intensity:
+    //   poly  → multiplicatively scale baseInterval toward polyFactor
+    //   weave → intensity-weighted blend of swing values across overlapping
+    //           weave auras
+    // ripple/cloud sends are handled in routeFinalOutput at note-route time.
+    let weaveBlendNum = 0, weaveBlendDen = 0;
+    for (const m of seeds) {
+      if (m.kind !== 'modifier') continue;
+      const intensity = auraIntensityForSeed(m, seed);
+      if (intensity < 0.001) continue;
+      if (m.modifierKind === 'poly' && m.polyFactor) {
+        baseInterval *= 1 + (m.polyFactor - 1) * intensity;
+      } else if (m.modifierKind === 'weave' && m.swing != null) {
+        weaveBlendNum += m.swing * intensity;
+        weaveBlendDen += intensity;
       }
+    }
+    if (weaveBlendDen > 0) {
+      const avgSwing = weaveBlendNum / weaveBlendDen;
+      const i = Math.min(1.0, weaveBlendDen);
+      swing = 0.5 + (avgSwing - 0.5) * i;
     }
 
     // Catch-up logic: re-anchor patternIdx when nextTrigger is
@@ -237,8 +254,82 @@ export function scheduleAhead() {
 }
 setInterval(scheduleAhead, 25);
 
+// === Physics: soft mass-aware repulsion + canvas-edge reflection ===
+// Each tick computes per-seed velocity from nearby-seed repulsion +
+// canvas-edge bounce, scales by 1/mass, damps, integrates position.
+// Damping (~0.85/tick) means things settle if not actively pushed —
+// the canvas isn't a perpetual chaos. Auras (modifiers) have high
+// mass so they barely budge but still get nudged a tiny bit on
+// collision; if we want them strictly immovable later we can clamp
+// their velocity to 0 directly.
+//
+// Currently-dragged seed is exempt — physics doesn't fight a drag.
+const CANVAS_W = 1400, CANVAS_H = 800;
+const CANVAS_MARGIN = 24;
+const PHYSICS_DAMPING = 0.85;
+const PHYSICS_MAX_V = 4.0;
+let draggedSeedId = null;
+export function setDraggedSeed(id) { draggedSeedId = id; }
+
+function physicsStep() {
+  // Compute repulsion forces. O(N²) but N is small (~25 worst case).
+  for (const a of seeds) {
+    if (a.id === draggedSeedId) continue;
+    let fx = 0, fy = 0;
+    for (const b of seeds) {
+      if (b === a) continue;
+      const dx = a.cx - b.cx;
+      const dy = a.cy - b.cy;
+      const dist = Math.hypot(dx, dy);
+      // Start repelling slightly before bodies touch so things
+      // don't lock together. Soft cubic falloff with distance.
+      const reach = (a.r + b.r) * 1.15;
+      if (dist >= reach) continue;
+      const overlap = reach - dist;
+      // Avoid divide-by-zero for stacked seeds; pick a random push.
+      let nx, ny;
+      if (dist < 0.001) {
+        const t = Math.random() * Math.PI * 2;
+        nx = Math.cos(t); ny = Math.sin(t);
+      } else {
+        nx = dx / dist; ny = dy / dist;
+      }
+      const force = overlap * 0.18;
+      fx += nx * force;
+      fy += ny * force;
+    }
+    // Canvas-edge reflection — soft inward force when close to a wall.
+    if (a.cx < CANVAS_MARGIN)              fx += (CANVAS_MARGIN - a.cx) * 0.10;
+    if (a.cx > CANVAS_W - CANVAS_MARGIN)   fx -= (a.cx - (CANVAS_W - CANVAS_MARGIN)) * 0.10;
+    if (a.cy < CANVAS_MARGIN)              fy += (CANVAS_MARGIN - a.cy) * 0.10;
+    if (a.cy > CANVAS_H - CANVAS_MARGIN)   fy -= (a.cy - (CANVAS_H - CANVAS_MARGIN)) * 0.10;
+    // Integrate. a = F/m → v += a, damp v, clamp, position += v.
+    const inv = 1 / (a.mass || 1);
+    a.vx = ((a.vx || 0) + fx * inv) * PHYSICS_DAMPING;
+    a.vy = ((a.vy || 0) + fy * inv) * PHYSICS_DAMPING;
+    if (a.vx > PHYSICS_MAX_V)  a.vx = PHYSICS_MAX_V;
+    if (a.vx < -PHYSICS_MAX_V) a.vx = -PHYSICS_MAX_V;
+    if (a.vy > PHYSICS_MAX_V)  a.vy = PHYSICS_MAX_V;
+    if (a.vy < -PHYSICS_MAX_V) a.vy = -PHYSICS_MAX_V;
+  }
+  // Apply integration as a second pass so all forces are computed
+  // from the same configuration (no order-dependent leakage).
+  let anyMoved = false;
+  for (const a of seeds) {
+    if (a.id === draggedSeedId) continue;
+    if (Math.abs(a.vx) < 0.02 && Math.abs(a.vy) < 0.02) continue;
+    a.cx += a.vx;
+    a.cy += a.vy;
+    anyMoved = true;
+    const node = seedNodes.get(a.id);
+    if (node) renderSeed(a);
+  }
+  if (anyMoved) renderTethers();
+}
+
 function visualTick() {
   const now = audioCtx ? audioCtx.currentTime : 0;
+  physicsStep();
   for (const seed of seeds) {
     const node = seedNodes.get(seed.id);
     if (!node) continue;

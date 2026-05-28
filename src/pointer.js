@@ -13,7 +13,7 @@ import {
 } from './timbres.js';
 import { state, seeds, seedById } from './state.js';
 import {
-  canvasEl, canvasWrap, tapMarkersLayer, SVGNS,
+  canvasEl, canvasWrap, SVGNS,
   makeSeed, syncRenderedSeeds, renderSeed, renderSpheres, renderTethers,
   radiusForFundamental,
 } from './seeds.js';
@@ -23,6 +23,7 @@ import {
 } from './audio/events.js';
 import { initAudio, audioCtx } from './audio/context.js';
 import { selectSeed } from './inspector.js';
+import { setDraggedSeed } from './scheduler.js';
 import { takeSnapshot } from './snapshots.js';
 import { setSetPlantModeFn } from './input.js';
 import { refreshPadLights } from './output/minilab3.js';
@@ -53,37 +54,6 @@ function seedAtCanvas(c) {
   return best;
 }
 
-let tapBuffer = null;
-const TAP_FINALIZE_MS = 1400;
-
-function showPlantingFeedback(x, y, taps) {
-  let el = document.getElementById('planting-feedback');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'planting-feedback';
-    el.className = 'planting-indicator';
-    canvasWrap.appendChild(el);
-  }
-  el.style.left = x + 'px';
-  el.style.top = y + 'px';
-  el.textContent = `${taps} ${taps === 1 ? 'tap' : 'taps'} · keep going or wait`;
-}
-
-function hidePlantingFeedback() {
-  const el = document.getElementById('planting-feedback');
-  if (el) el.remove();
-  while (tapMarkersLayer.firstChild) tapMarkersLayer.removeChild(tapMarkersLayer.firstChild);
-}
-
-function addTapMarker(x, y) {
-  const dot = document.createElementNS(SVGNS, 'circle');
-  dot.setAttribute('cx', x); dot.setAttribute('cy', y);
-  dot.setAttribute('r', 6);
-  dot.setAttribute('fill', 'rgba(255, 209, 102, 0.65)');
-  dot.setAttribute('class', 'tap-marker');
-  tapMarkersLayer.appendChild(dot);
-}
-
 function startTap(c) {
   // Bomb modes spawn a one-shot event at the tap point
   if (PULSE_KINDS[state.plantMode]) {
@@ -105,102 +75,34 @@ function startTap(c) {
     plantModifierAt(c);
     return;
   }
-  if (!tapBuffer) {
-    tapBuffer = {
-      svgX: c.x, svgY: c.y,
-      screenX: c.screenX - canvasWrap.getBoundingClientRect().left,
-      screenY: c.screenY - canvasWrap.getBoundingClientRect().top,
-      taps: [{ ts: performance.now(), y: c.y, x: c.x }],
-      firstY: c.y,
-    };
-  } else {
-    tapBuffer.taps.push({ ts: performance.now(), y: c.y, x: c.x });
-  }
-  addTapMarker(c.x, c.y);
-  showPlantingFeedback(tapBuffer.screenX, tapBuffer.screenY - 30, tapBuffer.taps.length);
-  clearTimeout(tapBuffer.timer);
-  tapBuffer.timer = setTimeout(finalizeTaps, TAP_FINALIZE_MS);
+  // Voice mode: plant one seed immediately at the click point with
+  // the role's default pattern. The earlier tap-buffer melody
+  // capture (multiple clicks → pitched pattern, after 1.4s timeout)
+  // was removed — recording melodies now goes through the MIDI
+  // device + on-screen keyboard exclusively, which gives clearer
+  // semantic intent and works the same on every input source.
+  plantVoiceSeedAt(c);
 }
 
-function finalizeTaps() {
-  if (!tapBuffer) return;
-  const taps = tapBuffer.taps;
+function plantVoiceSeedAt(c) {
   const role = TIMBRE_ROLES[activeRole] || TIMBRE_ROLES.melody;
   const gen = role.generate();
-
-  // Pitch from first tap's Y position, biased into role's natural
-  // range. Top of canvas = +1 octave, bottom = -1 octave from the
-  // role's default.
-  const yNorm = Math.max(0, Math.min(1, tapBuffer.firstY / 800));
+  // Pitch from Y position, biased into role's natural range.
+  // Top of canvas = +1 octave, bottom = -1 octave from default.
+  const yNorm = Math.max(0, Math.min(1, c.y / 800));
   const fundamental = gen.fundamentalHz * Math.pow(2, (0.5 - yNorm) * 1.6);
-
-  // === Pattern from tap timing on a quantized grid ===
-  //
-  // Old behaviour built one pattern entry per tap and used the average
-  // inter-tap interval as `intervalMs`. That collapsed any pause
-  // between taps — "tap [pause] tap tap tap tap" played back as five
-  // evenly-spaced taps. The user's relative timing was lost.
-  //
-  // New behaviour: bucket each tap into a fixed-step grid (1/16 notes
-  // when guardrails are on, 1/32 when off) so gaps become explicit
-  // velocity-0 rest steps. The seed's intervalMs becomes the step
-  // size, not the inter-tap average.
-  const PIXELS_PER_SEMITONE = 18;
-  const offsetOf = (t) => {
-    const dy = tapBuffer.firstY - t.y;
-    return Math.max(-14, Math.min(14, Math.round(dy / PIXELS_PER_SEMITONE)));
-  };
-  let pattern, intervalMs;
-  if (taps.length === 1) {
-    intervalMs = gen.intervalMs;
-    pattern = [{ offset: offsetOf(taps[0]), velocity: 1.0 }];
-  } else {
-    // Step size: BAR_MS/16 with guardrails (one 16th-note), BAR_MS/32
-    // without (a 32nd note — finer, more faithful to ad-hoc rhythms).
-    const stepMs = state.guardrails ? BAR_MS / 16 : BAR_MS / 32;
-    const t0 = taps[0].ts;
-    const lastT = taps[taps.length - 1].ts - t0;
-    // Cap the loop length at 4 bars so a long stream of taps doesn't
-    // produce a 200-step pattern. If the user taps for longer than 4
-    // bars, the latter taps wrap into the start.
-    const MAX_STEPS = state.guardrails ? 64 : 128;
-    const totalSteps = Math.max(
-      taps.length,
-      Math.min(MAX_STEPS, Math.ceil(lastT / stepMs) + 1));
-    const buckets = new Array(totalSteps).fill(null);
-    for (const t of taps) {
-      const rel = t.ts - t0;
-      let idx = Math.round(rel / stepMs);
-      // If the rounded slot is already taken, nudge to the nearest
-      // free slot so consecutive fast taps don't collapse onto one
-      // step.
-      let dir = 1;
-      while (buckets[idx] && idx >= 0 && idx < totalSteps) {
-        idx += dir;
-        if (idx < 0 || idx >= totalSteps) { dir = -dir; idx += dir; break; }
-      }
-      if (idx < 0) idx = 0;
-      if (idx >= totalSteps) idx = totalSteps - 1;
-      buckets[idx] = t;
-    }
-    intervalMs = stepMs;
-    pattern = buckets.map((t) => t
-      ? { offset: offsetOf(t), velocity: 1.0 }
-      : { offset: 0, velocity: 0 });
-  }
-
   const r = radiusForFundamental(fundamental);
   const labels = ['little wisp', 'soft hum', 'echo bone', 'spark', 'glimmer', 'small stone', 'feather', 'dapple', 'flicker', 'reed'];
   const label = labels[Math.floor(Math.random() * labels.length)];
-
   const seed = makeSeed({
-    cx: tapBuffer.svgX, cy: tapBuffer.svgY, r,
+    cx: c.x, cy: c.y, r,
     fundamental: Math.round(fundamental),
     decay: Math.round(gen.decay),
-    intervalMs: Math.round(intervalMs),
+    intervalMs: Math.round(gen.intervalMs),
     harmonics: gen.harmonics,
     color: role.color,
-    label, pattern,
+    label,
+    pattern: [{ offset: 0, velocity: 1.0 }],   // single-step default
     role: activeRole,
     synthesisModel: gen.synthesisModel,
     attackMs: gen.attackMs,
@@ -214,8 +116,6 @@ function finalizeTaps() {
       m.capturedSeedIds.add(seed.id);
     }
   }
-  hidePlantingFeedback();
-  tapBuffer = null;
   syncRenderedSeeds();
   selectSeed(seed.id);
   takeSnapshot('planted ' + label);
@@ -270,6 +170,8 @@ function beginDrag(evt, seedId) {
   if (!seed) return;
   const c = canvasCoords(evt);
   drag = { seed, offsetX: c.x - seed.cx, offsetY: c.y - seed.cy, moved: false };
+  setDraggedSeed(seedId);   // tell physics to skip this one while held
+  seed.vx = 0; seed.vy = 0; // kill any residual velocity from prior bumps
   selectSeed(seedId);
 }
 
@@ -325,6 +227,7 @@ function endDrag() {
   if (drag) {
     if (drag.seed.kind === 'modifier') renderSpheres();
     if (drag.moved) takeSnapshot('moved ' + drag.seed.label);
+    setDraggedSeed(null);   // physics can resume on this seed
     drag = null;
   }
 }

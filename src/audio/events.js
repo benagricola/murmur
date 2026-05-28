@@ -12,6 +12,7 @@
 import { audioCtx, masterGain, drumBus, initAudio } from './context.js';
 import { activeEvents, seeds, state, seedById } from '../state.js';
 import { BAR_MS } from '../tempo.js';
+import { auraIntensityForSeed } from '../seeds.js';
 
 export const PULSE_KINDS = {
   drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, durationBars: 1 },
@@ -75,12 +76,28 @@ export function routeFinalOutput(seed, node) {
       const isDrum = cat === 'drum' || cat === 'drum-kit';
       node.connect(isDrum && drumBus ? drumBus : masterGain);
     }
-    if (seed.capturedByIds && seed.capturedByIds.size > 0) {
-      for (const id of seed.capturedByIds) {
-        const m = seedById(id);
-        if (!m) continue;
-        if (m.modifierKind === 'ripple' && m.delayInput) node.connect(m.delayInput);
-        if (m.modifierKind === 'cloud'  && m.reverbInput) node.connect(m.reverbInput);
+    // Proximity-graded ripple / cloud sends. For every aura on the
+    // canvas, compute its intensity at this seed's position and route
+    // the audio through a per-send gain proportional to intensity.
+    // No-op when intensity is essentially zero (saves a gain node per
+    // distant aura). The send gain is set once at note creation —
+    // seeds drifting through the field have their NEXT notes attenuated
+    // at the new position; currently-playing notes don't re-modulate
+    // mid-flight.
+    for (const m of seeds) {
+      if (m.kind !== 'modifier') continue;
+      const intensity = auraIntensityForSeed(m, seed);
+      if (intensity < 0.02) continue;
+      if (m.modifierKind === 'ripple' && m.delayInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.delayInput);
+      } else if (m.modifierKind === 'cloud' && m.reverbInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.reverbInput);
       }
     }
   }

@@ -58,6 +58,51 @@ export function setSeedTiming(seed, key, ms) {
   if (fracKey) seed[fracKey] = BAR_MS > 0 ? ms / BAR_MS : 0;
 }
 
+// === Aura intensity field ===
+// Each aura is a circular region whose effect strength varies with
+// distance from the epicentre. The shape is `edgeIntensity` at the
+// sphere boundary, `centerIntensity` at the centre, interpolated by
+// `falloffCurve`. This replaces the old binary "in sphere or not"
+// capture model — seeds get more of an effect the deeper they are.
+export const AURA_CURVES = {
+  linear:   (t) => t,
+  easeIn:   (t) => t * t,
+  easeOut:  (t) => 1 - (1 - t) * (1 - t),
+  smooth:   (t) => t * t * (3 - 2 * t),
+  sharp:    (t) => t * t * t,
+  step:     (t) => t < 0.5 ? 0 : 1,
+};
+export const AURA_CURVE_KEYS = Object.keys(AURA_CURVES);
+
+export function auraIntensityAt(aura, x, y) {
+  if (!aura || aura.kind !== 'modifier' || !aura.sphereR) return 0;
+  const dist = Math.hypot(x - aura.cx, y - aura.cy);
+  if (dist >= aura.sphereR) return 0;
+  // frac: 0 at the edge, 1 at the centre.
+  const frac = 1 - (dist / aura.sphereR);
+  const fn = AURA_CURVES[aura.falloffCurve] || AURA_CURVES.linear;
+  const t = fn(Math.max(0, Math.min(1, frac)));
+  const edge = aura.edgeIntensity != null ? aura.edgeIntensity : 0;
+  const cen  = aura.centerIntensity != null ? aura.centerIntensity : 1;
+  return Math.max(0, Math.min(1, edge + t * (cen - edge)));
+}
+
+export function auraIntensityForSeed(aura, seed) {
+  return auraIntensityAt(aura, seed.cx, seed.cy);
+}
+
+// Seed mass for the soft-repulsion physics in scheduler.visualTick.
+// Heavier seeds barely move when bumped; lighter ones scatter. Mass
+// scales as log2(220 / fundamental) + 1 — 30 Hz → ~3.9, 220 → 1.0,
+// 1000 → ~-1.2 (clamped to 0.3). Modifiers (auras) get high mass so
+// they act as immovable territory.
+export function computeSeedMass(fundamental, kind, modifierKind) {
+  if (kind === 'modifier') return 8.0;   // immovable territory
+  const f = fundamental || 220;
+  const m = Math.log2(220 / f) + 1.0;
+  return Math.max(0.3, Math.min(4.0, m));
+}
+
 export function makeSeed(opts) {
   const intervalMs = opts.intervalMs || BEAT_MS;
   const decay      = opts.decay      || 500;
@@ -132,6 +177,13 @@ export function makeSeed(opts) {
     convolver: null,
     role: opts.role || null,
     swing: opts.swing !== undefined ? opts.swing : 0.5,
+    // Aura intensity grading. edgeIntensity = effect strength at the
+    // sphere boundary, centerIntensity = at the epicentre. The curve
+    // controls how intensity interpolates between them — linear by
+    // default, but the inspector lets the user pick an easing shape.
+    edgeIntensity:   opts.edgeIntensity   !== undefined ? opts.edgeIntensity   : 0,
+    centerIntensity: opts.centerIntensity !== undefined ? opts.centerIntensity : 1,
+    falloffCurve:    opts.falloffCurve || 'linear',
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
     attackFrac: attackMs / BAR_MS,
@@ -141,6 +193,12 @@ export function makeSeed(opts) {
     // line up at theta=0 and shapes look stamped from the same mould.
     blobPhases: opts.blobPhases || (new Array(NUM_HARMONICS).fill(0)
       .map(() => Math.random() * Math.PI * 2)),
+    // Physics: each seed has velocity + mass for soft repulsion.
+    // Mass derived from fundamental — lower freq = heavier (log-2
+    // scale centred on 220Hz = mass 1.0). Drum-kit seeds use a
+    // representative slot freq via their patch.
+    vx: 0, vy: 0,
+    mass: computeSeedMass(opts.fundamental, opts.kind, opts.modifierKind),
     muted: opts.muted || false,
     patch: opts.patch || null,
   };
@@ -235,18 +293,27 @@ export function blobPath(cx, cy, baseR, harmonicAmps, attachments, phases) {
 }
 
 export function attachmentsForSeed(seed) {
-  if (!seed || seed.kind !== 'voice' || !seed.capturedByIds || seed.capturedByIds.size === 0) return null;
+  if (!seed || seed.kind !== 'voice') return null;
+  // Walk every aura on the canvas and grow a tendril toward each one
+  // whose intensity at this seed is meaningful. Tendril strength
+  // scales with intensity, so a seed at the edge of an aura gets a
+  // tiny nub; deep inside, a full peak. Was capturedByIds-driven and
+  // binary; now graded.
   const atts = [];
-  for (const id of seed.capturedByIds) {
-    const m = seedById(id);
-    if (!m) continue;
+  for (const m of seeds) {
+    if (m.kind !== 'modifier') continue;
+    const intensity = auraIntensityForSeed(m, seed);
+    if (intensity < 0.05) continue;
     atts.push({
       angle: Math.atan2(m.cy - seed.cy, m.cx - seed.cx),
-      strength: PEAK_STRENGTH,
+      // Scale the original PEAK_STRENGTH/WIDTH by intensity so the
+      // tendril grows in / shrinks out as the seed drifts.
+      _intensity: intensity,
+      strength: PEAK_STRENGTH * intensity,
       width: PEAK_WIDTH,
     });
   }
-  return atts;
+  return atts.length > 0 ? atts : null;
 }
 
 export function renderSeed(seed) {
@@ -338,11 +405,16 @@ export function renderSpheres() {
 
 export function renderTethers() {
   tethersLayer.innerHTML = '';
+  // Tethers are drawn from each voice toward every aura whose
+  // intensity at that voice is above a visibility threshold. Opacity
+  // tracks intensity so an aura's edge produces a faint hint and the
+  // centre produces a fully-lit line.
   for (const v of seeds) {
-    if (v.kind !== 'voice' || !v.capturedByIds || v.capturedByIds.size === 0) continue;
-    for (const modId of v.capturedByIds) {
-      const m = seedById(modId);
-      if (!m) continue;
+    if (v.kind !== 'voice') continue;
+    for (const m of seeds) {
+      if (m.kind !== 'modifier') continue;
+      const intensity = auraIntensityForSeed(m, v);
+      if (intensity < 0.05) continue;
       const path = document.createElementNS(SVGNS, 'path');
       const ang = Math.atan2(m.cy - v.cy, m.cx - v.cx);
       const ax = v.cx + v.r * PEAK_TIP_FACTOR * Math.cos(ang);
@@ -357,6 +429,7 @@ export function renderTethers() {
       path.setAttribute('d', `M ${ax.toFixed(1)} ${ay.toFixed(1)} Q ${ctrlX.toFixed(1)} ${ctrlY.toFixed(1)}, ${bx.toFixed(1)} ${by.toFixed(1)}`);
       path.setAttribute('class', 'tether-' + m.modifierKind);
       path.setAttribute('stroke', m.color);
+      path.setAttribute('opacity', intensity.toFixed(3));
       tethersLayer.appendChild(path);
     }
   }
