@@ -175,7 +175,14 @@ function beginDrag(evt, seedId) {
   const seed = seedById(seedId);
   if (!seed) return;
   const c = canvasCoords(evt);
-  drag = { seed, offsetX: c.x - seed.cx, offsetY: c.y - seed.cy, moved: false };
+  drag = {
+    seed, offsetX: c.x - seed.cx, offsetY: c.y - seed.cy, moved: false,
+    // Recent-velocity tracking for release inertia. We keep a 3-frame
+    // moving average so a quick wiggle at release doesn't get translated
+    // into an oversized post-release flick.
+    velSamples: [],
+    lastX: seed.cx, lastY: seed.cy, lastT: performance.now(),
+  };
   setDraggedSeed(seedId);   // tell physics to skip this one while held
   seed.vx = 0; seed.vy = 0; // kill any residual velocity from prior bumps
   selectSeed(seedId);
@@ -184,16 +191,35 @@ function beginDrag(evt, seedId) {
 function continueDrag(evt) {
   if (!drag) return;
   const c = canvasCoords(evt);
-  drag.seed.cx = Math.max(40, Math.min(1360, c.x - drag.offsetX));
-  drag.seed.cy = Math.max(40, Math.min(760, c.y - drag.offsetY));
+  // Clamp the seed's centre so its visible body (radius) stays
+  // entirely inside the canvas. Margin = 8 logical px beyond the
+  // radius so the halo doesn't kiss the edge.
+  const margin = 8 + (drag.seed.r || 0);
+  drag.seed.cx = Math.max(margin, Math.min(1400 - margin, c.x - drag.offsetX));
+  drag.seed.cy = Math.max(margin, Math.min(800  - margin, c.y - drag.offsetY));
   drag.moved = true;
+  // Track per-frame velocity for release inertia. Pixels per ~16ms
+  // tick converted into "units per physics tick" (≈ pixels/frame).
+  const tnow = performance.now();
+  const dt = Math.max(1, tnow - drag.lastT);
+  const vx = (drag.seed.cx - drag.lastX) * (16 / dt);
+  const vy = (drag.seed.cy - drag.lastY) * (16 / dt);
+  drag.velSamples.push({ vx, vy });
+  if (drag.velSamples.length > 3) drag.velSamples.shift();
+  drag.lastX = drag.seed.cx;
+  drag.lastY = drag.seed.cy;
+  drag.lastT = tnow;
   renderSeed(drag.seed);
   if (drag.seed.kind === 'voice') {
     updateVoiceCaptures(drag.seed);
     renderTethers();
     renderSeed(drag.seed);
   } else if (drag.seed.kind === 'modifier') {
+    // Aura dragged: its sphere + point cloud + tethers all need to
+    // follow in real time. Without renderSpheres here, the gradient
+    // ring + dots stay at the OLD position until pointerup.
     reevaluateAllCaptures();
+    renderSpheres();
     renderTethers();
   }
 }
@@ -232,7 +258,25 @@ export function reevaluateAllCaptures() {
 function endDrag() {
   if (drag) {
     if (drag.seed.kind === 'modifier') renderSpheres();
-    if (drag.moved) takeSnapshot('moved ' + drag.seed.label);
+    if (drag.moved) {
+      // Release inertia — if the user let go while the pointer was
+      // moving, the seed inherits that velocity scaled by 1/mass
+      // (heavier seeds carry less inertia, lighter ones fly). Damping
+      // in physicsStep gradually slows it. If the user let go while
+      // stationary, the average velocity is ~0 and nothing happens.
+      let avgX = 0, avgY = 0;
+      for (const s of drag.velSamples) { avgX += s.vx; avgY += s.vy; }
+      if (drag.velSamples.length > 0) {
+        avgX /= drag.velSamples.length;
+        avgY /= drag.velSamples.length;
+        // Velocity scale: at mass 1 the inertia matches the drag
+        // velocity. Heavier seeds keep less momentum (1/mass).
+        const massScale = 1 / Math.max(0.3, drag.seed.mass || 1);
+        drag.seed.vx = avgX * massScale;
+        drag.seed.vy = avgY * massScale;
+      }
+      takeSnapshot('moved ' + drag.seed.label);
+    }
     setDraggedSeed(null);   // physics can resume on this seed
     drag = null;
   }

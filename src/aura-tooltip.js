@@ -57,8 +57,10 @@ function positionTooltip() {
 }
 
 // Build the list of every aura affecting this seed right now, with
-// intensity (0..1) at the seed's current position. Sorted strongest
-// first so the most-important effect reads first.
+// intensity (0..1) at the seed's current position. Sorted
+// alphabetically by aura label — sorting by intensity made the list
+// flip order constantly as a drifting seed crossed close-strength
+// thresholds, which was visually distracting.
 function effectsForSeed(seed) {
   if (!seed || seed.kind !== 'voice') return [];
   const out = [];
@@ -68,7 +70,23 @@ function effectsForSeed(seed) {
     if (intensity < 0.01) continue;
     out.push({ aura: m, intensity });
   }
-  out.sort((a, b) => b.intensity - a.intensity);
+  out.sort((a, b) => labelFor(a.aura.modifierKind).localeCompare(labelFor(b.aura.modifierKind)));
+  return out;
+}
+
+// When the hovered thing IS an aura, report what's INSIDE it
+// instead of which auras affect it (which is always zero — auras
+// don't get captured by other auras). Same alphabetical sort.
+function seedsInAura(aura) {
+  if (!aura || aura.kind !== 'modifier') return [];
+  const out = [];
+  for (const s of seeds) {
+    if (s.kind !== 'voice') continue;
+    const intensity = auraIntensityForSeed(aura, s);
+    if (intensity < 0.01) continue;
+    out.push({ seed: s, intensity });
+  }
+  out.sort((a, b) => String(a.seed.label || '').localeCompare(String(b.seed.label || '')));
   return out;
 }
 
@@ -87,28 +105,90 @@ function effectValueLabel(aura, intensity) {
   return `${Math.round(intensity * 100)}%`;
 }
 
-// Called from scheduler.visualTick while a seed is hovered so the
-// values update live for drifting seeds and changing aura configs.
+// Compact pattern preview for a tonal seed — one dot per pattern
+// step, lit if hit, dim if rest. Up to 32 steps; longer patterns
+// truncate with an ellipsis. Helps the user spot which seed in a
+// busy canvas plays what without having to select+inspect.
+function renderPatternPreview(seed) {
+  if (!seed.pattern || seed.pattern.length === 0) return '';
+  const MAX = 32;
+  const steps = seed.pattern.slice(0, MAX);
+  const dots = steps.map(s => {
+    const lit = (s.velocity || 0) > 0.05;
+    const colour = lit ? (seed.color || '#fff') : 'rgba(255,255,255,0.15)';
+    return `<span class="aura-tooltip-step" style="background:${colour}"></span>`;
+  }).join('');
+  const more = seed.pattern.length > MAX
+    ? `<span class="aura-tooltip-step-more">+${seed.pattern.length - MAX}</span>`
+    : '';
+  return `<div class="aura-tooltip-pattern">${dots}${more}</div>`;
+}
+
+// Called from scheduler.visualTick while something is hovered so
+// the values update live for drifting seeds + changing aura configs.
 export function refreshTooltip() {
   if (!tooltipEl || hoveredSeedId == null) return;
   const seed = seedById(hoveredSeedId);
   if (!seed) { tooltipEl.classList.remove('open'); hoveredSeedId = null; return; }
-  const effects = effectsForSeed(seed);
-  const title = `<div class="aura-tooltip-title">${escapeHtml(seed.label || 'seed')}</div>`;
-  if (effects.length === 0) {
-    tooltipEl.innerHTML = title + `<div class="aura-tooltip-empty">no auras</div>`;
-  } else {
-    const rows = effects.map(e => {
-      const colour = e.aura.color || '#aaa';
-      return `<div class="aura-tooltip-row">
-        <span class="dot" style="background:${colour}"></span>
-        <span class="name">${escapeHtml(labelFor(e.aura.modifierKind))}</span>
-        <span class="val">${escapeHtml(effectValueLabel(e.aura, e.intensity))}</span>
-      </div>`;
-    }).join('');
-    tooltipEl.innerHTML = title + rows;
+
+  // Two display modes — voice seed hover shows "what auras are
+  // affecting me". Aura hover shows "what am I affecting + my
+  // settings". Different question, different answer.
+  if (seed.kind === 'voice') {
+    const effects = effectsForSeed(seed);
+    const title = `<div class="aura-tooltip-title">${escapeHtml(seed.label || 'seed')}</div>`;
+    const pattern = renderPatternPreview(seed);
+    let body;
+    if (effects.length === 0) {
+      body = `<div class="aura-tooltip-empty">no auras affecting</div>`;
+    } else {
+      body = effects.map(e => {
+        const colour = e.aura.color || '#aaa';
+        return `<div class="aura-tooltip-row">
+          <span class="dot" style="background:${colour}"></span>
+          <span class="name">${escapeHtml(labelFor(e.aura.modifierKind))}</span>
+          <span class="val">${escapeHtml(effectValueLabel(e.aura, e.intensity))}</span>
+        </div>`;
+      }).join('');
+    }
+    tooltipEl.innerHTML = title + pattern + body;
+  } else if (seed.kind === 'modifier') {
+    const inside = seedsInAura(seed);
+    const colour = seed.color || '#aaa';
+    const settings = auraSettingsLine(seed);
+    const title = `<div class="aura-tooltip-title">
+      <span class="dot" style="background:${colour}"></span>
+      ${escapeHtml(labelFor(seed.modifierKind))} aura
+    </div>`;
+    let body = settings ? `<div class="aura-tooltip-settings">${escapeHtml(settings)}</div>` : '';
+    if (inside.length === 0) {
+      body += `<div class="aura-tooltip-empty">no seeds inside</div>`;
+    } else {
+      body += `<div class="aura-tooltip-section">affecting:</div>`;
+      body += inside.map(e => `<div class="aura-tooltip-row">
+        <span class="dot" style="background:${e.seed.color || '#888'}"></span>
+        <span class="name">${escapeHtml(e.seed.label || 'seed')}</span>
+        <span class="val">${Math.round(e.intensity * 100)}%</span>
+      </div>`).join('');
+    }
+    tooltipEl.innerHTML = title + body;
   }
   positionTooltip();
+}
+
+// One-line description of what the aura currently does. Pulls the
+// kind-specific parameter so the user knows e.g. swing strength,
+// delay time, drive amount.
+function auraSettingsLine(aura) {
+  const k = aura.modifierKind;
+  if (k === 'weave')  return `swing ${(aura.swing || 0.5).toFixed(2)}`;
+  if (k === 'ripple') return `delay ${Math.round(aura.delayMs || 0)} ms`;
+  if (k === 'cloud')  return `reverb ${(aura.reverbSec || 0).toFixed(1)} s`;
+  if (k === 'poly')   return `ratio ${(aura.polyFactor || 1).toFixed(2)}`;
+  if (k === 'drive')  return `drive ×${(aura.driveAmount || 0).toFixed(1)}`;
+  if (k === 'gain')   return `boost ${(aura.gainAmount || 1).toFixed(2)}× at centre`;
+  if (k === 'mute')   return `hush ${(aura.gainAmount || 0).toFixed(2)}× at centre`;
+  return '';
 }
 
 function escapeHtml(s) {

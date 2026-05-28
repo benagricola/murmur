@@ -348,10 +348,16 @@ function physicsStep(silent) {
       a._duckUntil = tnow + 250;
     }
     // Canvas-edge reflection — soft inward force when close to a wall.
-    if (a.cx < CANVAS_MARGIN)              fx += (CANVAS_MARGIN - a.cx) * 0.10;
-    if (a.cx > CANVAS_W - CANVAS_MARGIN)   fx -= (a.cx - (CANVAS_W - CANVAS_MARGIN)) * 0.10;
-    if (a.cy < CANVAS_MARGIN)              fy += (CANVAS_MARGIN - a.cy) * 0.10;
-    if (a.cy > CANVAS_H - CANVAS_MARGIN)   fy -= (a.cy - (CANVAS_H - CANVAS_MARGIN)) * 0.10;
+    // Threshold accounts for the seed's radius so the BODY doesn't
+    // extend past the canvas edge (previous behaviour let blobs poke
+    // out into the top bar / timeline area). Stronger spring than
+    // before — was 0.10, now 0.25 — so high-velocity items don't
+    // breach the margin before the force can reverse them.
+    const edge = CANVAS_MARGIN + (a.r || 0);
+    if (a.cx < edge)              fx += (edge - a.cx) * 0.25;
+    if (a.cx > CANVAS_W - edge)   fx -= (a.cx - (CANVAS_W - edge)) * 0.25;
+    if (a.cy < edge)              fy += (edge - a.cy) * 0.25;
+    if (a.cy > CANVAS_H - edge)   fy -= (a.cy - (CANVAS_H - edge)) * 0.25;
     // Integrate. a = F/m → v += a, damp v, clamp, position += v.
     const inv = 1 / (a.mass || 1);
     a.vx = ((a.vx || 0) + fx * inv) * PHYSICS_DAMPING;
@@ -371,6 +377,16 @@ function physicsStep(silent) {
     if (Math.abs(a.vx) < 0.02 && Math.abs(a.vy) < 0.02) continue;
     a.cx += a.vx;
     a.cy += a.vy;
+    // Hard clamp on top of the soft edge force. Belt-and-braces:
+    // even if a body breaches the soft margin (e.g. dragged hard
+    // by another collision), it can't escape the canvas. Zero out
+    // the velocity component pushing into the wall so the seed
+    // stops rather than vibrating against it.
+    const hardEdge = (a.r || 0);
+    if (a.cx < hardEdge)              { a.cx = hardEdge;              if (a.vx < 0) a.vx = 0; }
+    if (a.cx > CANVAS_W - hardEdge)   { a.cx = CANVAS_W - hardEdge;   if (a.vx > 0) a.vx = 0; }
+    if (a.cy < hardEdge)              { a.cy = hardEdge;              if (a.vy < 0) a.vy = 0; }
+    if (a.cy > CANVAS_H - hardEdge)   { a.cy = CANVAS_H - hardEdge;   if (a.vy > 0) a.vy = 0; }
     anyMoved = true;
     if (!silent) {
       const node = seedNodes.get(a.id);
