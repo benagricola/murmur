@@ -370,22 +370,48 @@ export function setupMIDI() {
     return;
   }
   navigator.requestMIDIAccess({ sysex: true }).then((access) => {
-    midiAccess = access;
-    setMidiAccessRef(access);
-    refreshMIDIInputs();
-    access.onstatechange = refreshMIDIInputsDebounced;
+    onAccessGranted(access);
   }).catch((err) => {
     console.warn('MIDI access (with SysEx) denied; retrying without SysEx', err);
     navigator.requestMIDIAccess().then((access) => {
-      midiAccess = access;
-      setMidiAccessRef(access);
-      refreshMIDIInputs();
-      access.onstatechange = refreshMIDIInputsDebounced;
+      onAccessGranted(access);
     }).catch((err2) => {
       console.warn('MIDI access denied', err2);
       document.getElementById('midi-label').textContent = 'midi denied';
     });
   });
+}
+
+// Initial enumeration of already-connected MIDI devices is unreliable
+// on Linux (and sometimes on Chrome generally) — the promise can
+// resolve before ALSA has reported all the ports for a device that
+// was plugged in BEFORE the page loaded. Symptom: the user has to
+// unplug + replug the MiniLab to get the app to notice it.
+//
+// Two-pronged fix:
+//   1. Retry-poll the input/output enumeration on a back-off schedule
+//      (250/750/2000/4000 ms) so late ports get picked up without
+//      requiring a state-change event.
+//   2. Re-probe on the user's first interaction with the page (some
+//      browsers won't enumerate MIDI until after a user gesture).
+function onAccessGranted(access) {
+  midiAccess = access;
+  setMidiAccessRef(access);
+  refreshMIDIInputs();
+  access.onstatechange = refreshMIDIInputsDebounced;
+  for (const delay of [250, 750, 2000, 4000]) {
+    setTimeout(() => {
+      if (!midiAccess) return;
+      refreshMIDIInputs();
+    }, delay);
+  }
+  const reprobeOnce = () => {
+    refreshMIDIInputs();
+    window.removeEventListener('pointerdown', reprobeOnce, true);
+    window.removeEventListener('keydown', reprobeOnce, true);
+  };
+  window.addEventListener('pointerdown', reprobeOnce, true);
+  window.addEventListener('keydown', reprobeOnce, true);
 }
 
 // MIDI access state-change events fire once per port (input + output)

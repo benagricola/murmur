@@ -449,8 +449,15 @@ export function renderSeed(seed) {
     node.halo.setAttribute('filter', 'url(#halo-blur)');
     node.core.setAttribute('class', 'seed-core');
   }
-  node.halo.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * 1.3, seed.harmonics, atts, seed.blobPhases));
-  node.core.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, atts, seed.blobPhases));
+  // Modifier bodies render at a smaller visual radius — the point
+  // cloud IS the aura's identity; the body is just an anchor / handle
+  // for selection + dragging. Voice seeds still render at full radius.
+  // Collision and capture still use seed.r so physics behaviour is
+  // unchanged.
+  const visScale = seed.kind === 'modifier' ? 0.45 : 1.0;
+  const haloScale = seed.kind === 'modifier' ? 0.55 : 1.3;
+  node.halo.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * haloScale, seed.harmonics, atts, seed.blobPhases));
+  node.core.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * visScale, seed.harmonics, atts, seed.blobPhases));
   node.label.setAttribute('x', seed.cx);
   node.label.setAttribute('y', seed.cy + seed.r + 22);
   node.label.textContent = seed.label;
@@ -476,27 +483,36 @@ function generateAuraDots() {
   return pts;
 }
 
+// Sphere groups: one <g> per aura, transform="translate(cx, cy)".
+// Children (gradient ring + dots) are positioned in local coords
+// around (0, 0). When the aura moves, we update only the transform
+// attribute (one write per aura) instead of rebuilding 120+ circles.
+const auraGroups = new Map();   // seedId → <g>
+
 export function renderSpheres() {
   spheresLayer.innerHTML = '';
+  auraGroups.clear();
   for (const s of seeds) {
     if (s.kind !== 'modifier' || !s.sphereR) continue;
-    // Soft fill ring (the existing radial-gradient circle) for the
-    // overall territory hint.
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('transform', `translate(${s.cx.toFixed(1)},${s.cy.toFixed(1)})`);
+    g.dataset.seedId = s.id;
+    // Soft fill ring at (0, 0) — gradient + radius unchanged.
     const c = document.createElementNS(SVGNS, 'circle');
-    c.setAttribute('cx', s.cx); c.setAttribute('cy', s.cy);
+    c.setAttribute('cx', 0); c.setAttribute('cy', 0);
     c.setAttribute('r', s.sphereR);
     c.setAttribute('class', 'sphere');
     c.setAttribute('fill', `url(#sphere-${s.modifierKind}-grad)`);
-    spheresLayer.appendChild(c);
-    // Point-cloud overlay: each dot's opacity tracks the aura's
-    // intensity at that point. Together they form a density gradient
-    // that follows the chosen falloff curve + edge/centre values.
+    g.appendChild(c);
+    // Point cloud — each dot's intensity depends only on the offset
+    // from the aura centre, so once computed it stays valid wherever
+    // the aura moves. We embed intensity into opacity at build time.
     if (!s._auraDots) s._auraDots = generateAuraDots();
     for (const p of s._auraDots) {
       const r = s.sphereR * p.frac;
-      const x = s.cx + r * Math.cos(p.theta);
-      const y = s.cy + r * Math.sin(p.theta);
-      const intensity = auraIntensityAt(s, x, y);
+      const x = r * Math.cos(p.theta);
+      const y = r * Math.sin(p.theta);
+      const intensity = auraIntensityLocal(s, p.frac);
       if (intensity < 0.04) continue;
       const dot = document.createElementNS(SVGNS, 'circle');
       dot.setAttribute('cx', x.toFixed(1));
@@ -505,9 +521,34 @@ export function renderSpheres() {
       dot.setAttribute('fill', s.color);
       dot.setAttribute('opacity', (intensity * 0.7).toFixed(3));
       dot.setAttribute('pointer-events', 'none');
-      spheresLayer.appendChild(dot);
+      g.appendChild(dot);
     }
+    spheresLayer.appendChild(g);
+    auraGroups.set(s.id, g);
   }
+}
+
+// Cheap per-frame update — only touches the transform attribute on
+// each aura's group. Called from physicsStep so the point cloud
+// tracks the aura when it gets nudged around by collisions / drift.
+export function updateSphereTransforms() {
+  for (const [id, g] of auraGroups) {
+    const s = seedById(id);
+    if (!s) continue;
+    g.setAttribute('transform', `translate(${s.cx.toFixed(1)},${s.cy.toFixed(1)})`);
+  }
+}
+
+// Intensity from radial fraction (0 = edge, 1 = centre). Doesn't
+// depend on the aura's absolute position, so we can precompute it
+// and the value stays correct as the aura moves.
+function auraIntensityLocal(aura, frac) {
+  const f = Math.max(0, Math.min(1, frac));
+  const fn = AURA_CURVES[aura.falloffCurve] || AURA_CURVES.linear;
+  const t = fn(1 - f);   // frac is distance/sphereR; intensity uses 1-distance
+  const edge = aura.edgeIntensity != null ? aura.edgeIntensity : 0;
+  const cen  = aura.centerIntensity != null ? aura.centerIntensity : 1;
+  return Math.max(0, Math.min(1, edge + t * (cen - edge)));
 }
 
 // Tether particle streams — each (seed, aura) pair gets a small

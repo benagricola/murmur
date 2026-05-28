@@ -23,7 +23,7 @@ import {
 import { seeds, activeEvents, state, seedById } from './state.js';
 import {
   SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
-  auraIntensityForSeed,
+  updateSphereTransforms, auraIntensityForSeed,
 } from './seeds.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 import { refreshTooltip as refreshAuraTooltip } from './aura-tooltip.js';
@@ -460,7 +460,10 @@ function physicsStep(silent) {
       if (node) renderSeed(a);
     }
   }
-  if (anyMoved && !silent) renderTethers();
+  if (anyMoved && !silent) {
+    renderTethers();
+    updateSphereTransforms();
+  }
 }
 
 // Each frame, walk every voice seed and compute its net gain
