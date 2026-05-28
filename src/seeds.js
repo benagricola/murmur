@@ -390,16 +390,54 @@ export function renderSeed(seed) {
   node.wrap.classList.toggle('muted', !!seed.muted);
 }
 
+// Each aura caches a set of point positions in normalised
+// (theta, frac) form — frac in 0..1 of sphereR — so they survive
+// sphere resizing without regenerating. Density is uniform across
+// the disc; visual density of LIT dots tracks intensity, since
+// out-of-range dots are skipped at render time.
+const AURA_DOTS_PER_SPHERE = 120;
+function generateAuraDots() {
+  const pts = [];
+  for (let i = 0; i < AURA_DOTS_PER_SPHERE; i++) {
+    pts.push({
+      theta: Math.random() * Math.PI * 2,
+      frac: Math.sqrt(Math.random()),   // uniform disc sampling
+    });
+  }
+  return pts;
+}
+
 export function renderSpheres() {
   spheresLayer.innerHTML = '';
   for (const s of seeds) {
     if (s.kind !== 'modifier' || !s.sphereR) continue;
+    // Soft fill ring (the existing radial-gradient circle) for the
+    // overall territory hint.
     const c = document.createElementNS(SVGNS, 'circle');
     c.setAttribute('cx', s.cx); c.setAttribute('cy', s.cy);
     c.setAttribute('r', s.sphereR);
     c.setAttribute('class', 'sphere');
     c.setAttribute('fill', `url(#sphere-${s.modifierKind}-grad)`);
     spheresLayer.appendChild(c);
+    // Point-cloud overlay: each dot's opacity tracks the aura's
+    // intensity at that point. Together they form a density gradient
+    // that follows the chosen falloff curve + edge/centre values.
+    if (!s._auraDots) s._auraDots = generateAuraDots();
+    for (const p of s._auraDots) {
+      const r = s.sphereR * p.frac;
+      const x = s.cx + r * Math.cos(p.theta);
+      const y = s.cy + r * Math.sin(p.theta);
+      const intensity = auraIntensityAt(s, x, y);
+      if (intensity < 0.04) continue;
+      const dot = document.createElementNS(SVGNS, 'circle');
+      dot.setAttribute('cx', x.toFixed(1));
+      dot.setAttribute('cy', y.toFixed(1));
+      dot.setAttribute('r', 1.6);
+      dot.setAttribute('fill', s.color);
+      dot.setAttribute('opacity', (intensity * 0.7).toFixed(3));
+      dot.setAttribute('pointer-events', 'none');
+      spheresLayer.appendChild(dot);
+    }
   }
 }
 

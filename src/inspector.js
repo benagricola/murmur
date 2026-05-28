@@ -16,6 +16,7 @@ import { TIMBRE_ROLES } from './timbres.js';
 import { seeds, seedById, state } from './state.js';
 import {
   SVGNS, renderSeed, removeSeed, radiusForFundamental, syncRenderedSeeds,
+  AURA_CURVE_KEYS,
 } from './seeds.js';
 import { setStepHighlightHandler, playNoteAt } from './scheduler.js';
 import { refreshSelectionLights, paintScreen } from './output/minilab3.js';
@@ -281,8 +282,14 @@ export function selectSeed(id) {
     updatePatternLoopInfo(seed);
   }
   const sphereRow = document.getElementById('sphere-row');
+  const falloffRow = document.getElementById('falloff-row');
+  const edgeRow = document.getElementById('edge-intensity-row');
+  const centerRow = document.getElementById('center-intensity-row');
   if (seed.kind === 'modifier') {
     sphereRow.style.display = '';
+    falloffRow.style.display = '';
+    edgeRow.style.display = '';
+    centerRow.style.display = '';
     buildPicker(
       document.getElementById('sphere-picker'),
       SPHERE_OPTIONS,
@@ -294,8 +301,33 @@ export function selectSeed(id) {
       },
       () => nearestOptionIdx(SPHERE_OPTIONS.map(o => ({ms: o.r})), seed.sphereR)
     );
+    // Falloff curve picker — how the aura's intensity shapes from
+    // edgeIntensity at the boundary to centerIntensity at the centre.
+    const curveOpts = AURA_CURVE_KEYS.map(k => ({ label: k, key: k }));
+    buildPicker(
+      document.getElementById('falloff-picker'),
+      curveOpts,
+      (opt) => {
+        seed.falloffCurve = opt.key;
+        syncRenderedSeeds();
+        takeSnapshotFn('falloff: ' + opt.label);
+      },
+      () => Math.max(0, AURA_CURVE_KEYS.indexOf(seed.falloffCurve || 'linear'))
+    );
+    // Edge + centre intensity sliders.
+    const edgeSlider = document.getElementById('edge-intensity-slider');
+    const edgeVal = document.getElementById('edge-intensity-val');
+    const eI = Math.round((seed.edgeIntensity != null ? seed.edgeIntensity : 0) * 100);
+    edgeSlider.value = eI; edgeVal.textContent = eI + '%';
+    const centerSlider = document.getElementById('center-intensity-slider');
+    const centerVal = document.getElementById('center-intensity-val');
+    const cI = Math.round((seed.centerIntensity != null ? seed.centerIntensity : 1) * 100);
+    centerSlider.value = cI; centerVal.textContent = cI + '%';
   } else {
     sphereRow.style.display = 'none';
+    falloffRow.style.display = 'none';
+    edgeRow.style.display = 'none';
+    centerRow.style.display = 'none';
   }
   const capInfo = document.getElementById('captured-info');
   if (seed.kind === 'voice' && seed.capturedByIds && seed.capturedByIds.size > 0) {
@@ -626,6 +658,29 @@ document.getElementById('seed-vol-slider').addEventListener('input', (e) => {
   document.getElementById('seed-vol-val').textContent = pct + '%';
 });
 document.getElementById('seed-vol-slider').addEventListener('change', () => takeSnapshotFn('tweaked volume'));
+
+// Aura intensity sliders — edge + centre value, 0..100% mapped to
+// the seed's edgeIntensity / centerIntensity (0..1). The aura's
+// effect ramps from edge value at the sphere boundary to centre
+// value at the epicentre via its falloffCurve.
+document.getElementById('edge-intensity-slider').addEventListener('input', (e) => {
+  const s = seedById(state.selectedSeedId);
+  if (!s || s.kind !== 'modifier') return;
+  const pct = parseInt(e.target.value);
+  s.edgeIntensity = pct / 100;
+  document.getElementById('edge-intensity-val').textContent = pct + '%';
+  syncRenderedSeeds();
+});
+document.getElementById('edge-intensity-slider').addEventListener('change', () => takeSnapshotFn('tweaked edge intensity'));
+document.getElementById('center-intensity-slider').addEventListener('input', (e) => {
+  const s = seedById(state.selectedSeedId);
+  if (!s || s.kind !== 'modifier') return;
+  const pct = parseInt(e.target.value);
+  s.centerIntensity = pct / 100;
+  document.getElementById('center-intensity-val').textContent = pct + '%';
+  syncRenderedSeeds();
+});
+document.getElementById('center-intensity-slider').addEventListener('change', () => takeSnapshotFn('tweaked centre intensity'));
 document.getElementById('quantize-toggle').addEventListener('click', () => {
   const s = seedById(state.selectedSeedId);
   if (!s) return;

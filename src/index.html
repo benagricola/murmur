@@ -177,6 +177,23 @@
       <div class="picker" id="sphere-picker"></div>
     </div>
 
+    <div class="picker-row" id="falloff-row" style="display: none;">
+      <label>falloff</label>
+      <div class="picker" id="falloff-picker"></div>
+    </div>
+
+    <div class="pitch-row" id="edge-intensity-row" style="display: none;">
+      <label>edge</label>
+      <input type="range" class="std" id="edge-intensity-slider" min="0" max="100" step="1" value="0">
+      <span class="pitch-val" id="edge-intensity-val">0%</span>
+    </div>
+
+    <div class="pitch-row" id="center-intensity-row" style="display: none;">
+      <label>centre</label>
+      <input type="range" class="std" id="center-intensity-slider" min="0" max="100" step="1" value="100">
+      <span class="pitch-val" id="center-intensity-val">100%</span>
+    </div>
+
     <button class="btn delete-btn" id="delete-btn">remove this seed</button>
   </aside>
 
