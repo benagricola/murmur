@@ -319,9 +319,11 @@ function physicsStep(silent) {
       const dx = a.cx - b.cx;
       const dy = a.cy - b.cy;
       const dist = Math.hypot(dx, dy);
-      // Start repelling slightly before bodies touch so things
-      // don't lock together. Soft cubic falloff with distance.
-      const reach = (a.r + b.r) * 1.15;
+      // Collision radius matches the seed's full VISUAL extent —
+      // body radius × 1.3 (halo path) × 1.15 (margin for harmonic
+      // perturbations) ≈ 1.5×. Previous 1.15× was body-only and let
+      // halos overlap visually by ~30% before repulsion kicked in.
+      const reach = (a.r + b.r) * 1.5;
       if (dist >= reach) continue;
       const overlap = reach - dist;
       // Avoid divide-by-zero for stacked seeds; pick a random push.
@@ -332,7 +334,10 @@ function physicsStep(silent) {
       } else {
         nx = dx / dist; ny = dy / dist;
       }
-      const force = overlap * 0.18;
+      // Stronger force (0.18 → 0.30) so overlapping bodies actually
+      // separate rather than equilibrating mid-overlap when forces
+      // and damping balance out.
+      const force = overlap * 0.30;
       fx += nx * force;
       fy += ny * force;
       // Track strongest impact this tick — fires a duck if the
