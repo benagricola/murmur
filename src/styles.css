@@ -540,18 +540,6 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
   display: flex; align-items: center; gap: 6px;
   font-size: 10px;
 }
-.latency-readout {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  color: var(--ink-faint);
-  /* Reserve width for the widest "999ms" reading so the neighbouring
-     elements don't shift as the value updates. */
-  min-width: 56px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-.latency-readout.warn { color: #ffc56b; }
-.latency-readout.bad { color: #ff8a8a; }
 .midi-led {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--ink-faint);

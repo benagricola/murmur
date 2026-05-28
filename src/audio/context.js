@@ -26,13 +26,47 @@ export const NUM_HARMONICS = 12;
 const onCreatedHooks = [];
 export function onContextCreated(fn) { onCreatedHooks.push(fn); }
 
-export function showAudioStatus(text, kind = '') {
+// The status pill carries two things:
+//   1. A lifecycle line ("starting", "running", "error: …"). Owned
+//      by showAudioStatus; whoever last called it wins.
+//   2. A latency suffix appended automatically — `audio Xms` always,
+//      and `midi Yms` once a MIDI press has been measured. Set via
+//      showAudioStatusLatency from input.js.
+let lastStatusText = 'not started';
+let lastStatusKind = '';
+let lastAudioLatencyMs = null;
+let lastMidiLatencyMs = null;
+
+function repaintAudioStatus() {
   const el = document.getElementById('audio-status');
   if (!el) return;
-  el.textContent = 'audio: ' + text;
+  let suffix = '';
+  if (lastAudioLatencyMs != null && lastAudioLatencyMs > 0) {
+    suffix += ` · audio ${lastAudioLatencyMs.toFixed(0)}ms`;
+  }
+  if (lastMidiLatencyMs != null) {
+    suffix += ` · midi ${lastMidiLatencyMs.toFixed(0)}ms`;
+  }
+  el.textContent = 'audio: ' + lastStatusText + suffix;
   el.classList.remove('error', 'ok');
-  if (kind === 'error') el.classList.add('error');
-  else if (kind === 'ok') el.classList.add('ok');
+  if (lastStatusKind === 'error') el.classList.add('error');
+  else if (lastStatusKind === 'ok') el.classList.add('ok');
+}
+
+export function showAudioStatus(text, kind = '') {
+  lastStatusText = text;
+  lastStatusKind = kind;
+  repaintAudioStatus();
+}
+
+if (typeof window !== 'undefined') {
+  // Public hook called from input.js whenever it has new numbers.
+  // Either argument may be null when not yet known.
+  window.showAudioStatusLatency = (audioMs, midiMs) => {
+    if (audioMs != null) lastAudioLatencyMs = audioMs;
+    if (midiMs != null) lastMidiLatencyMs = midiMs;
+    repaintAudioStatus();
+  };
 }
 
 // Race a promise against a timer so a hung Promise can't freeze our flow.

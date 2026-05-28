@@ -502,90 +502,72 @@ function guessArturiaProduct(family, model) {
 }
 
 // === Latency measurement ===
-// Captured per-noteOn from MIDI hardware. Breaks the press → audio
-// chain into:
-//   delivery  — `performance.now() - evt.timeStamp`: the gap between
-//               the OS receiving the MIDI byte and Chrome dispatching
-//               the event into our JS handler. Usually < 1ms.
-//   handler   — the wall-clock time we spent inside JS before we
-//               called playPatch. Should be < 1ms unless GC pauses.
-//   audio     — `audioCtx.outputLatency + baseLatency`: the buffer +
-//               driver delay between scheduling a sound at
-//               currentTime and the user actually hearing it. This
-//               is the dominant component on most setups (10-50ms).
-//   total     — the sum, an estimate of the press → hear gap.
-// Exposed via murmurLatency() in devtools and via a top-bar readout.
+//
+// Two distinct numbers, displayed in the bottom-right audio-status pill:
+//   midi  — wall-clock gap between the MIDI message's `evt.timeStamp`
+//           (OS-side arrival) and JS handler completion. This is the
+//           "extra" cost incurred ONLY when input comes from a MIDI
+//           device — driver delivery + browser dispatch + handler work.
+//           Captured on each MIDI noteOn; rolling-averaged.
+//   audio — `audioCtx.outputLatency + baseLatency` in ms. The audio
+//           buffer + driver delay between scheduling a sound at
+//           currentTime and the user actually hearing it. Applies to
+//           EVERY sound the app produces: pattern playback, drums,
+//           live keys. Same number whether MIDI or on-screen
+//           keyboard initiated it.
+// Total for a MIDI key press ≈ midi + audio. Total for a pattern
+// note or on-screen-keyboard press ≈ audio alone.
+// Exposed via murmurLatency() in devtools.
 const latencyHistory = [];
-let lastNoteHandlerStart = 0;
-function recordHandlerStart() { lastNoteHandlerStart = performance.now(); }
+let lastMidiHandlerStart = 0;
+let lastMidiLatencyMs = null;   // last captured midi delivery+handler
+function recordHandlerStart() { lastMidiHandlerStart = performance.now(); }
 export function recordPlayLatency(evtTimeStamp, audioCtxRef) {
   if (evtTimeStamp == null || !audioCtxRef) return;
   const handlerEnd = performance.now();
-  const delivery = Math.max(0, lastNoteHandlerStart - evtTimeStamp);
-  const handler = Math.max(0, handlerEnd - lastNoteHandlerStart);
+  // Single "midi" number: gap from MIDI message arriving at OS to JS
+  // finishing its handler. Includes both browser delivery delay and
+  // our handler work — both add to the perceived press-to-hear gap.
+  const midi = Math.max(0, handlerEnd - evtTimeStamp);
   const audio = ((audioCtxRef.outputLatency || 0) + (audioCtxRef.baseLatency || 0)) * 1000;
-  const total = delivery + handler + audio;
-  latencyHistory.push({ delivery, handler, audio, total, ts: handlerEnd });
-  // Cap the rolling window so a long session doesn't grow without bound.
+  lastMidiLatencyMs = midi;
+  latencyHistory.push({ midi, audio, ts: handlerEnd });
   while (latencyHistory.length > 50) latencyHistory.shift();
-  updateLatencyReadout(total, audio);
+  refreshLatencyDisplay();
 }
 
-function updateLatencyReadout(totalMs, audioMs) {
-  const el = document.getElementById('latency-readout');
-  if (!el) return;
-  el.textContent = totalMs.toFixed(0) + 'ms';
-  el.classList.toggle('warn', totalMs >= 30 && totalMs < 60);
-  el.classList.toggle('bad', totalMs >= 60);
-  el.title = `MIDI → audio: ${totalMs.toFixed(0)}ms (audio buffer ${audioMs.toFixed(0)}ms — same buffer applies to pattern playback)`;
+// Push the current numbers into the audio-status pill. Polled once
+// a second so the audio number refreshes as the context settles,
+// and called immediately whenever a MIDI note updates the midi side.
+function refreshLatencyDisplay() {
+  if (typeof window.showAudioStatusLatency !== 'function') return;
+  const audioMs = audioCtx ? ((audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0)) * 1000 : null;
+  window.showAudioStatusLatency(audioMs, lastMidiLatencyMs);
 }
-
-// Standing audio-buffer latency from the AudioContext. This is the
-// floor — the delay between scheduling a sound at currentTime and the
-// user hearing it. It applies to EVERY sound the app produces (live
-// keys, pattern playback, drum hits), not just MIDI keypresses, so
-// we display it constantly. Updates whenever audioCtx exists. The
-// number can be 0 in Firefox before audio actually starts (the spec
-// allows reporting 0 until a context is properly running).
-function refreshStandingLatency() {
-  const el = document.getElementById('latency-readout');
-  if (!el) return;
-  if (!audioCtx) { el.textContent = '— ms'; el.title = 'audio context not started — click anywhere to enable sound'; return; }
-  const audioMs = ((audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0)) * 1000;
-  if (audioMs <= 0) {
-    el.textContent = '— ms';
-    el.title = 'audio context running but buffer latency not yet reported (try playing a key)';
-    return;
-  }
-  el.textContent = audioMs.toFixed(0) + 'ms';
-  el.classList.toggle('warn', audioMs >= 30 && audioMs < 60);
-  el.classList.toggle('bad', audioMs >= 60);
-  el.title = `audio buffer + driver: ${audioMs.toFixed(0)}ms — base of every sound (pattern playback, live keys, drums)`;
-}
-// Poll once a second so we catch the buffer latency settling shortly
-// after audio starts. Cheap; outputLatency is a property read.
 if (typeof setInterval !== 'undefined') {
-  setInterval(refreshStandingLatency, 1000);
+  setInterval(refreshLatencyDisplay, 1000);
 }
 
 if (typeof window !== 'undefined') {
   window.murmurLatency = () => {
+    const audioMs = audioCtx ? ((audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0)) * 1000 : null;
     if (latencyHistory.length === 0) {
-      console.log('[latency] no MIDI notes captured yet — play a key.');
-      return null;
+      console.log('[latency] audio buffer:', audioMs == null ? 'audio context not started' : audioMs.toFixed(2) + ' ms');
+      console.log('[latency] no MIDI notes captured yet — play a key to measure midi latency.');
+      return { audio: audioMs, midi: null, samples: 0 };
     }
     const last = latencyHistory[latencyHistory.length - 1];
     const avg = (k) => latencyHistory.reduce((s, x) => s + x[k], 0) / latencyHistory.length;
     const summary = {
-      last,
-      average: { delivery: avg('delivery'), handler: avg('handler'), audio: avg('audio'), total: avg('total') },
+      audio: audioMs,
+      midi: { last: last.midi, avg: avg('midi') },
+      total_keypress: audioMs == null ? null : audioMs + last.midi,
       samples: latencyHistory.length,
     };
     console.table([
-      { phase: 'delivery (OS → JS)', last: last.delivery.toFixed(2), avg: summary.average.delivery.toFixed(2) },
-      { phase: 'handler (JS work)', last: last.handler.toFixed(2), avg: summary.average.handler.toFixed(2) },
-      { phase: 'audio (buffer + driver)', last: last.audio.toFixed(2), avg: summary.average.audio.toFixed(2) },
-      { phase: 'total (est. press → hear)', last: last.total.toFixed(2), avg: summary.average.total.toFixed(2) },
+      { phase: 'audio (buffer + driver)', last: audioMs == null ? '—' : audioMs.toFixed(2), avg: audioMs == null ? '—' : audioMs.toFixed(2) },
+      { phase: 'midi (delivery + handler)', last: last.midi.toFixed(2), avg: avg('midi').toFixed(2) },
+      { phase: 'total keypress (= midi + audio)', last: audioMs == null ? '—' : (last.midi + audioMs).toFixed(2), avg: audioMs == null ? '—' : (avg('midi') + audioMs).toFixed(2) },
     ]);
     return summary;
   };
