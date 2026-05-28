@@ -74,6 +74,11 @@ export function selectSeed(id) {
   state.selectedSeedId = id;
   const tmplEdit = document.getElementById('template-edit');
   if (tmplEdit) tmplEdit.style.display = 'none';
+  // Delete button gets hidden by showLiveTemplate and needs to come
+  // back when a real seed (voice OR modifier) is selected — both
+  // kinds should be deletable.
+  const delBtn = document.getElementById('delete-btn');
+  if (delBtn) delBtn.style.display = '';
   refreshRecButtonLabel();
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;

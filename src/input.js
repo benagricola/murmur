@@ -383,35 +383,81 @@ export function setupMIDI() {
 }
 
 // Initial enumeration of already-connected MIDI devices is unreliable
-// on Linux (and sometimes on Chrome generally) — the promise can
-// resolve before ALSA has reported all the ports for a device that
-// was plugged in BEFORE the page loaded. Symptom: the user has to
-// unplug + replug the MiniLab to get the app to notice it.
+// on Linux/Chromium — the WebMIDI client opened by requestMIDIAccess
+// can miss ALSA ports that existed BEFORE that client was created.
+// Symptom: the user has to unplug + replug the MiniLab to get the app
+// to notice it, even though permission was already granted.
 //
-// Two-pronged fix:
-//   1. Retry-poll the input/output enumeration on a back-off schedule
-//      (250/750/2000/4000 ms) so late ports get picked up without
-//      requiring a state-change event.
-//   2. Re-probe on the user's first interaction with the page (some
-//      browsers won't enumerate MIDI until after a user gesture).
+// Mitigations layered here:
+//   1. Re-call requestMIDIAccess on a back-off schedule. Each call
+//      makes Chrome create a fresh seq client which DOES enumerate
+//      already-connected devices. Permission is cached after the
+//      first grant, so no prompts.
+//   2. State-change debounced refresh covers hot-plug events.
+//   3. First user gesture also triggers a re-probe — Brave/Chrome in
+//      some configs gate enumeration behind a user gesture.
 function onAccessGranted(access) {
-  midiAccess = access;
-  setMidiAccessRef(access);
-  refreshMIDIInputs();
-  access.onstatechange = refreshMIDIInputsDebounced;
-  for (const delay of [250, 750, 2000, 4000]) {
-    setTimeout(() => {
-      if (!midiAccess) return;
-      refreshMIDIInputs();
-    }, delay);
+  installAccess(access);
+  for (const delay of [250, 750, 2000, 4000, 8000]) {
+    setTimeout(probeForDevicesIfMissing, delay);
   }
   const reprobeOnce = () => {
-    refreshMIDIInputs();
+    probeForDevicesIfMissing();
     window.removeEventListener('pointerdown', reprobeOnce, true);
     window.removeEventListener('keydown', reprobeOnce, true);
   };
   window.addEventListener('pointerdown', reprobeOnce, true);
   window.addEventListener('keydown', reprobeOnce, true);
+}
+
+function installAccess(access) {
+  midiAccess = access;
+  setMidiAccessRef(access);
+  access.onstatechange = refreshMIDIInputsDebounced;
+  refreshMIDIInputs();
+}
+
+// If we don't have ANY non-skipped inputs yet, ask Chrome for a new
+// MIDIAccess. This rebuilds the seq client and surfaces ports that
+// the original access object missed. We only do this when nothing's
+// detected, so a healthy session isn't disturbed.
+function probeForDevicesIfMissing() {
+  if (!midiAccess) return;
+  const haveInputs = countUsableInputs(midiAccess) > 0;
+  if (haveInputs) return;
+  if (!navigator.requestMIDIAccess) return;
+  navigator.requestMIDIAccess({ sysex: true })
+    .then(installAccess)
+    .catch(() => {
+      navigator.requestMIDIAccess()
+        .then(installAccess)
+        .catch(() => {});
+    });
+}
+
+function countUsableInputs(access) {
+  let n = 0;
+  for (const input of access.inputs.values()) {
+    if (MIDI_PORT_SKIP_PATTERN.test(input.name || '')) continue;
+    n++;
+  }
+  return n;
+}
+
+if (typeof window !== 'undefined') {
+  window.murmurMIDIDiag = () => {
+    if (!midiAccess) return console.log('[midi-diag] no MIDIAccess yet');
+    const rows = [];
+    for (const input of midiAccess.inputs.values()) {
+      rows.push({ direction: 'in', name: input.name, manufacturer: input.manufacturer, state: input.state, connection: input.connection, skipped: MIDI_PORT_SKIP_PATTERN.test(input.name || '') });
+    }
+    for (const output of midiAccess.outputs.values()) {
+      rows.push({ direction: 'out', name: output.name, manufacturer: output.manufacturer, state: output.state, connection: output.connection });
+    }
+    if (rows.length === 0) console.log('[midi-diag] no ports visible to the page — try replug or run navigator.requestMIDIAccess() manually');
+    else console.table(rows);
+    return rows;
+  };
 }
 
 // MIDI access state-change events fire once per port (input + output)
