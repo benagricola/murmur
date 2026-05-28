@@ -27,11 +27,20 @@
       </div>
       <div class="vol-wrap"><span>vol</span><span class="soft-wrap"><input type="range" class="std" id="vol" min="0" max="100" value="35"><span class="soft-marker" id="vol-soft-marker"></span></span></div>
       <div class="vol-wrap"><span>tempo</span><span class="soft-wrap"><input type="range" class="std" id="tempo-slider" min="60" max="180" step="1" value="120"><span class="soft-marker" id="tempo-soft-marker"></span></span><span id="tempo-val">120 bpm</span></div>
-      <button class="btn" id="metro-btn" title="Click track (metronome) — toggles a click on every beat while playing">🔔 click</button>
-      <button class="btn" id="snap-btn">📷</button>
-      <button class="btn" id="demo-btn" title="Roll a new demo composition (techno / dnb / dub)">🎲 demo</button>
+      <button class="btn icon-btn" id="metro-btn" title="Click track (metronome) — toggles a click on every beat while playing" aria-label="metronome">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 14 L7 2 L9 2 L11 14 Z M3 14 L13 14 M8 8 L10.5 4.5"/></svg>
+      </button>
+      <button class="btn icon-btn" id="snap-btn" title="Take a snapshot of the canvas" aria-label="snapshot">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 5 L5 5 L6 3 L10 3 L11 5 L14 5 L14 13 L2 13 Z M8 6 a2.5 2.5 0 1 0 0 5 a2.5 2.5 0 1 0 0 -5"/></svg>
+      </button>
+      <button class="btn icon-btn" id="demo-btn" title="Roll a new demo composition (techno / dnb / dub)" aria-label="demo">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><circle cx="5.5" cy="5.5" r="0.5" fill="currentColor"/><circle cx="10.5" cy="5.5" r="0.5" fill="currentColor"/><circle cx="8" cy="8" r="0.5" fill="currentColor"/><circle cx="5.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="10.5" cy="10.5" r="0.5" fill="currentColor"/></svg>
+      </button>
+      <button class="btn icon-btn" id="kbd-btn" title="Toggle the on-screen piano keyboard" aria-label="toggle keyboard">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="12" height="7" rx="1"/><path d="M5 5 L5 9 M8 5 L8 9 M11 5 L11 9"/></svg>
+      </button>
       <button class="btn" id="clear-btn" title="Clear canvas (a snapshot is taken first so you can revert)">clear</button>
-      <button class="btn" id="midi-log-btn" title="Download the captured MIDI event log as JSON">midi log</button>
+      <button class="btn" id="midi-log-btn" title="Toggle the MIDI log panel (shift+click downloads JSON)">midi log</button>
     </div>
   </header>
 
@@ -67,23 +76,23 @@
           <feGaussianBlur stdDeviation="10"/>
         </filter>
         <radialGradient id="sphere-weave-grad">
-          <stop offset="0%"  stop-color="#ffa94d" stop-opacity="0.10"/>
-          <stop offset="70%" stop-color="#ffa94d" stop-opacity="0.04"/>
+          <stop offset="0%"  stop-color="#ffa94d" stop-opacity="0.20"/>
+          <stop offset="70%" stop-color="#ffa94d" stop-opacity="0.08"/>
           <stop offset="100%" stop-color="#ffa94d" stop-opacity="0"/>
         </radialGradient>
         <radialGradient id="sphere-ripple-grad">
-          <stop offset="0%"  stop-color="#e8a8c8" stop-opacity="0.10"/>
-          <stop offset="70%" stop-color="#e8a8c8" stop-opacity="0.04"/>
+          <stop offset="0%"  stop-color="#e8a8c8" stop-opacity="0.20"/>
+          <stop offset="70%" stop-color="#e8a8c8" stop-opacity="0.08"/>
           <stop offset="100%" stop-color="#e8a8c8" stop-opacity="0"/>
         </radialGradient>
         <radialGradient id="sphere-cloud-grad">
-          <stop offset="0%"  stop-color="#d0d8e8" stop-opacity="0.10"/>
-          <stop offset="70%" stop-color="#d0d8e8" stop-opacity="0.04"/>
+          <stop offset="0%"  stop-color="#d0d8e8" stop-opacity="0.18"/>
+          <stop offset="70%" stop-color="#d0d8e8" stop-opacity="0.07"/>
           <stop offset="100%" stop-color="#d0d8e8" stop-opacity="0"/>
         </radialGradient>
         <radialGradient id="sphere-poly-grad">
-          <stop offset="0%"  stop-color="#9be9a8" stop-opacity="0.10"/>
-          <stop offset="70%" stop-color="#9be9a8" stop-opacity="0.04"/>
+          <stop offset="0%"  stop-color="#9be9a8" stop-opacity="0.20"/>
+          <stop offset="70%" stop-color="#9be9a8" stop-opacity="0.08"/>
           <stop offset="100%" stop-color="#9be9a8" stop-opacity="0"/>
         </radialGradient>
       </defs>

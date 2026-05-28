@@ -136,6 +136,11 @@ export function makeSeed(opts) {
     attackMs,
     attackFrac: attackMs / BAR_MS,
     polyFactor: opts.polyFactor !== undefined ? opts.polyFactor : 2/3,
+    // Per-seed harmonic phase offsets — gives each seed a unique
+    // blob orientation. Without this every blob's harmonic ripples
+    // line up at theta=0 and shapes look stamped from the same mould.
+    blobPhases: opts.blobPhases || (new Array(NUM_HARMONICS).fill(0)
+      .map(() => Math.random() * Math.PI * 2)),
     muted: opts.muted || false,
     patch: opts.patch || null,
   };
@@ -191,15 +196,23 @@ export function radiusForFundamental(hz) {
   return Math.max(18, Math.min(80, 50 + (220 - hz) / 8));
 }
 
-export function blobPath(cx, cy, baseR, harmonicAmps, attachments) {
+export function blobPath(cx, cy, baseR, harmonicAmps, attachments, phases) {
   const N = 128;
   const pts = [];
+  // `phases` (optional) — per-harmonic phase offset 0..2π. Without it
+  // every harmonic's cosine ripple starts at theta=0, so blob shapes
+  // always lean rightward and look samey. With it (set per seed at
+  // creation), each seed gets a unique orientation while preserving
+  // the same overall spectrum-driven character.
   for (let i = 0; i < N; i++) {
     const theta = (i / N) * Math.PI * 2;
     let r = baseR;
     for (let h = 0; h < harmonicAmps.length; h++) {
       const amp = harmonicAmps[h];
-      if (amp) r += baseR * amp * 0.55 * Math.cos((h + 2) * theta);
+      if (amp) {
+        const phase = phases ? (phases[h] || 0) : 0;
+        r += baseR * amp * 0.55 * Math.cos((h + 2) * theta + phase);
+      }
     }
     if (attachments) {
       for (const a of attachments) {
@@ -293,15 +306,15 @@ export function renderSeed(seed) {
     }
     if (seed.modifierKind === 'ripple') {
       for (const g of node.ghosts.children) {
-        g.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics));
+        g.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, null, seed.blobPhases));
       }
     }
   } else {
     node.halo.setAttribute('filter', 'url(#halo-blur)');
     node.core.setAttribute('class', 'seed-core');
   }
-  node.halo.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * 1.3, seed.harmonics, atts));
-  node.core.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, atts));
+  node.halo.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * 1.3, seed.harmonics, atts, seed.blobPhases));
+  node.core.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, atts, seed.blobPhases));
   node.label.setAttribute('x', seed.cx);
   node.label.setAttribute('y', seed.cy + seed.r + 22);
   node.label.textContent = seed.label;

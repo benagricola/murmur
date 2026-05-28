@@ -35,13 +35,18 @@ export function pulseCurrentRadius(ev) {
   return ev.maxRadius * phase;
 }
 
-// Return any pulses whose current radius contains this seed.
+// Return any pulses whose current radius reaches this seed's edge.
+// Edge-based (radius + seed.r) instead of centre-based — a pulse
+// dropped slightly inside the seed's halo now triggers immediately
+// rather than waiting for the pulse to grow far enough to cross the
+// seed's centre. Same logic for sweeps below.
 export function activePulsesAffecting(seed) {
   const out = [];
+  const r0 = seed.r || 0;
   for (const ev of activeEvents) {
     if (ev.state !== 'expanding') continue;
     const r = pulseCurrentRadius(ev);
-    if (Math.hypot(seed.cx - ev.cx, seed.cy - ev.cy) <= r) out.push(ev);
+    if (Math.hypot(seed.cx - ev.cx, seed.cy - ev.cy) <= r + r0) out.push(ev);
   }
   return out;
 }

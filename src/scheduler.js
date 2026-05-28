@@ -336,12 +336,18 @@ function updateEvents() {
         const dx = ev.x1 - ev.x0;
         const dy = ev.y1 - ev.y0;
         const lenSq = dx*dx + dy*dy || 1;
+        const sweepLen = Math.sqrt(lenSq);
         const def = SWEEP_KINDS[ev.kind];
         for (const seed of seeds) {
           if (seed.kind !== 'voice') continue;
           if (ev.affectedSeedIds.has(seed.id)) continue;
           const t = ((seed.cx - ev.x0) * dx + (seed.cy - ev.y0) * dy) / lenSq;
-          if (t <= phase && t <= 1) {
+          // Edge-based crossing: the wavefront touches the seed when
+          // its NEAREST point (t - seed.r/sweepLen along the line)
+          // crosses phase. Without this we'd wait for the wavefront
+          // to reach the seed's centre, making sweeps feel laggy.
+          const edgeT = t - (seed.r || 0) / sweepLen;
+          if (edgeT <= phase && t <= 1) {
             ev.affectedSeedIds.add(seed.id);
             if (def.action === 'mute') seed.muted = true;
             else if (def.action === 'unmute') seed.muted = false;

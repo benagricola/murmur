@@ -353,6 +353,21 @@ body::before {
   color: var(--accent, #ffd166);
   border-color: rgba(255, 209, 102, 0.45);
 }
+
+/* Icon-only top-bar buttons. Square hit area; SVG inherits via
+   currentColor so it matches the theme rather than the colourful
+   emoji it replaced. */
+.btn.icon-btn {
+  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn.icon-btn svg { display: block; }
+
+/* Piano bar can be hidden via .hidden — toggled by the kbd-btn in
+   the top bar. Reclaims the vertical space when hidden. */
+.piano-bar.hidden { display: none; }
 .btn.recording {
   background: var(--accent-red); color: #fff;
   border-color: var(--accent-red); font-weight: 500;
@@ -902,7 +917,7 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .seed-selected .seed-label { fill: #fff8c8; font-size: 14px; }
 .sphere {
   pointer-events: none;
-  stroke: rgba(255, 255, 255, 0.07);
+  stroke: rgba(255, 255, 255, 0.14);
   stroke-width: 1;
   stroke-dasharray: 2 6;
 }
