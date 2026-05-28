@@ -1287,3 +1287,9 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
   margin-right: 6px;
   vertical-align: 1px;
 }
+
+/* Currently-playing step in the tooltip pattern preview. Bright
+   outline ring so it reads as 'live' against the soft hit dots. */
+.aura-tooltip-step.current {
+  box-shadow: 0 0 0 1.5px #fff8c8, 0 0 4px rgba(255, 248, 200, 0.6);
+}

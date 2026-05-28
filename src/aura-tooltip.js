@@ -106,17 +106,22 @@ function effectValueLabel(aura, intensity) {
 }
 
 // Compact pattern preview for a tonal seed — one dot per pattern
-// step, lit if hit, dim if rest. Up to 32 steps; longer patterns
-// truncate with an ellipsis. Helps the user spot which seed in a
-// busy canvas plays what without having to select+inspect.
+// step, lit if hit, dim if rest. The currently-playing step gets a
+// bright outline so the preview reads "live". seed.currentStep is
+// updated by the scheduler at each step's fire time (see
+// playSeedStep's setTimeout), so this refreshes naturally as the
+// tooltip re-renders from visualTick.
 function renderPatternPreview(seed) {
   if (!seed.pattern || seed.pattern.length === 0) return '';
   const MAX = 32;
   const steps = seed.pattern.slice(0, MAX);
-  const dots = steps.map(s => {
+  const current = seed.currentStep;
+  const dots = steps.map((s, idx) => {
     const lit = (s.velocity || 0) > 0.05;
+    const isCurrent = idx === current;
+    const cls = isCurrent ? 'aura-tooltip-step current' : 'aura-tooltip-step';
     const colour = lit ? (seed.color || '#fff') : 'rgba(255,255,255,0.15)';
-    return `<span class="aura-tooltip-step" style="background:${colour}"></span>`;
+    return `<span class="${cls}" style="background:${colour}"></span>`;
   }).join('');
   const more = seed.pattern.length > MAX
     ? `<span class="aura-tooltip-step-more">+${seed.pattern.length - MAX}</span>`
@@ -142,7 +147,8 @@ export function refreshTooltip() {
     if (effects.length === 0) {
       body = `<div class="aura-tooltip-empty">no auras affecting</div>`;
     } else {
-      body = effects.map(e => {
+      body = `<div class="aura-tooltip-section">affected by:</div>`;
+      body += effects.map(e => {
         const colour = e.aura.color || '#aaa';
         return `<div class="aura-tooltip-row">
           <span class="dot" style="background:${colour}"></span>
