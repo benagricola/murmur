@@ -386,6 +386,15 @@ body::before {
   border-color: var(--accent-red); font-weight: 500;
   animation: rec-pulse 800ms ease-in-out infinite;
 }
+/* Reserve width for the longest label the record button can show.
+   "● record variant" is wider than "● record" and "■ stop", so
+   without this the surrounding top-bar elements shift left/right
+   whenever the selected seed changes. Same principle as #tempo-val
+   reserving space for 3-digit BPM. */
+#rec-btn {
+  min-width: 130px;
+  text-align: center;
+}
 .btn.danger {
   background: rgba(255, 107, 107, 0.18); color: #ffb3b3;
   border-color: rgba(255, 107, 107, 0.55);
