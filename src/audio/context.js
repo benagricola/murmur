@@ -26,20 +26,37 @@ export const NUM_HARMONICS = 12;
 const onCreatedHooks = [];
 export function onContextCreated(fn) { onCreatedHooks.push(fn); }
 
-// The status pill carries two things:
-//   1. A lifecycle line ("starting", "running", "error: …"). Owned
-//      by showAudioStatus; whoever last called it wins.
-//   2. A latency suffix appended automatically — `audio Xms` always,
-//      and `midi Yms` once a MIDI press has been measured. Set via
-//      showAudioStatusLatency from input.js.
-let lastStatusText = 'not started';
-let lastStatusKind = '';
+// The status pill answers exactly one question: "can the audio
+// engine make sound at all?" — separate from the composition
+// transport (which the play button shows). Possible top words:
+//   ready   — audioCtx.state === 'running'. Pressing keys, planting
+//             seeds, all sound is operational.
+//   blocked — audioCtx.state === 'suspended'. Browsers start contexts
+//             suspended until a user gesture; the next click anywhere
+//             resumes it. Live notes / patterns produce no audio while
+//             this is on screen.
+//   closed  — audioCtx.state === 'closed'. Hard failure; reload.
+//   error   — context creation or resume threw. Detail comes via the
+//             optional override below.
+//
+// Latency numbers append as a suffix when known.
+let overrideText = null;
+let overrideKind = '';
 let lastAudioLatencyMs = null;
 let lastMidiLatencyMs = null;
+
+function stateWord() {
+  if (!audioCtx) return 'not started';
+  if (audioCtx.state === 'running') return 'ready';
+  if (audioCtx.state === 'suspended') return 'blocked (click to enable)';
+  if (audioCtx.state === 'closed') return 'closed';
+  return audioCtx.state || 'unknown';
+}
 
 function repaintAudioStatus() {
   const el = document.getElementById('audio-status');
   if (!el) return;
+  const text = overrideText != null ? overrideText : stateWord();
   let suffix = '';
   if (lastAudioLatencyMs != null && lastAudioLatencyMs > 0) {
     suffix += ` · audio ${lastAudioLatencyMs.toFixed(0)}ms`;
@@ -47,21 +64,32 @@ function repaintAudioStatus() {
   if (lastMidiLatencyMs != null) {
     suffix += ` · midi ${lastMidiLatencyMs.toFixed(0)}ms`;
   }
-  el.textContent = 'audio: ' + lastStatusText + suffix;
+  el.textContent = 'audio: ' + text + suffix;
   el.classList.remove('error', 'ok');
-  if (lastStatusKind === 'error') el.classList.add('error');
-  else if (lastStatusKind === 'ok') el.classList.add('ok');
+  if (overrideKind === 'error') el.classList.add('error');
+  else if (audioCtx && audioCtx.state === 'running' && overrideKind !== 'error') el.classList.add('ok');
 }
 
+// Internal callers (resume timeouts, create failures, etc.) push
+// transient text that wins over the derived state word. Pass null
+// to clear and return to the derived word.
 export function showAudioStatus(text, kind = '') {
-  lastStatusText = text;
-  lastStatusKind = kind;
+  overrideText = text;
+  overrideKind = kind;
   repaintAudioStatus();
 }
 
+// Poll the live context state so the pill never goes stale — the
+// browser can flip suspended → running on a user gesture without
+// notifying us, and we want the readout to track that immediately.
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    // If an override is in place, leave it; otherwise re-derive.
+    if (overrideText == null) repaintAudioStatus();
+  }, 500);
+}
+
 if (typeof window !== 'undefined') {
-  // Public hook called from input.js whenever it has new numbers.
-  // Either argument may be null when not yet known.
   window.showAudioStatusLatency = (audioMs, midiMs) => {
     if (audioMs != null) lastAudioLatencyMs = audioMs;
     if (midiMs != null) lastMidiLatencyMs = midiMs;
@@ -125,7 +153,8 @@ export function tryCreateContext() {
     } catch (e) {
       supportsPeriodicWave = false;
     }
-    showAudioStatus('ctx ' + audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'));
+    // Clear any prior override and let the pill derive from state.
+    showAudioStatus(null);
     for (const h of onCreatedHooks) { try { h(); } catch (e) {} }
     return true;
   } catch (e) {
@@ -140,19 +169,18 @@ export function tryCreateContext() {
 export async function ensureAudio() {
   if (!audioCtx && !tryCreateContext()) return null;
   if (audioCtx.state === 'suspended') {
-    showAudioStatus('resuming...');
+    // No transient "resuming..." text — the derived "blocked" word
+    // accurately describes the state until resume() actually flips it.
     const result = await withTimeout(audioCtx.resume(), 1500, 'resume');
     if (result.timeout) {
       showAudioStatus('resume timeout · state=' + audioCtx.state, 'error');
     } else if (result.error) {
       showAudioStatus('resume err · ' + (result.error.message || ''), 'error');
     } else {
-      showAudioStatus(audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'),
-                      audioCtx.state === 'running' ? 'ok' : '');
+      showAudioStatus(null);   // back to derived word
     }
   } else {
-    showAudioStatus(audioCtx.state + (supportsPeriodicWave ? '' : ' · basic'),
-                    audioCtx.state === 'running' ? 'ok' : '');
+    showAudioStatus(null);
   }
   return audioCtx;
 }

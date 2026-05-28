@@ -169,7 +169,9 @@ playBtn.addEventListener('click', async () => {
     state.isPlaying = false;
     playBtn.textContent = '▶ start';
     playBtn.classList.add('primary');
-    showAudioStatus(ctx.state + ' · stopped');
+    // Transport state lives on the play button (▶ vs ■); we no
+    // longer overload the audio-status pill with it, since the pill
+    // should answer the question "can the system make sound at all".
     stopClockOut();  // halt the MiniLab arpeggiator
     refreshPadLights(); paintScreen();
   } else {
@@ -185,8 +187,8 @@ playBtn.addEventListener('click', async () => {
     }
     // Tell beat-synced helpers (metronome, etc.) to re-anchor.
     window.dispatchEvent(new CustomEvent('play-anchor-changed'));
-    showAudioStatus(ctx.state + ' · playing' + (supportsPeriodicWave ? '' : ' · basic'),
-                    ctx.state === 'running' ? 'ok' : '');
+    // Same as the stop branch — leave audio-status untouched; the
+    // play button shows transport.
     startClockOut();  // sync the MiniLab arpeggiator to murmur's tempo
     refreshPadLights(); paintScreen();
   }
