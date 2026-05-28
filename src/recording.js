@@ -3,7 +3,7 @@
 // voice seed's pattern). Auto-finish kicks in after a quiet period
 // with no held keys.
 
-import { freqFromMidi, snapToScale, SEED_COLORS } from './constants.js';
+import { freqFromMidi, SEED_COLORS } from './constants.js';
 import { NUM_HARMONICS, initAudio, audioCtx } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
 import { seeds, state, seedById, activeLiveNotes } from './state.js';
@@ -158,8 +158,11 @@ function checkAutoFinishRecording() {
 }
 
 // Transform a recorded note stream into seed parameters.
-// Guardrails on: quantize to 16th notes, snap to scale. Otherwise
-// 32nd-note grid and keep raw pitches.
+// Guardrails on: align timing to a 16th-note grid. Off: 32nd-note
+// grid. Pitch is captured raw either way — if the user pressed F#,
+// they get F#. Earlier guardrails also forced pitch onto the active
+// scale, which silently changed wrong-note jazz inflections into
+// "clean" ones the user never played. Quantize is for timing only.
 function phraseFromRecording(buf) {
   const notes = buf.notes;
   if (notes.length === 0) return null;
@@ -255,14 +258,11 @@ function phraseFromRecording(buf) {
     // in a chord usually arrive within a few ms of each other, so one
     // shared value is musically right.
     const primaryRaw = notes[0];
-    const noteToFields = (nn) => {
-      const useMidi = state.guardrails ? snapToScale(nn.midi) : nn.midi;
-      return {
-        offset: useMidi - fundamentalMidi,
-        velocity: Math.max(0.3, Math.min(1.0, nn.velocity * 1.3)),
-        duration: Math.max(0.15, Math.min(8.0, nn.durMs / stepMs)),
-      };
-    };
+    const noteToFields = (nn) => ({
+      offset: nn.midi - fundamentalMidi,
+      velocity: Math.max(0.3, Math.min(1.0, nn.velocity * 1.3)),
+      duration: Math.max(0.15, Math.min(8.0, nn.durMs / stepMs)),
+    });
     const primary = noteToFields(primaryRaw);
     primary.tOffset = primaryRaw.tOffset || 0;
     if (notes.length > 1) primary.extras = notes.slice(1).map(noteToFields);
