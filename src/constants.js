@@ -115,6 +115,13 @@ export const POLY_COLOR   = '#9be9a8';
 export const DRIVE_COLOR = '#ff7a4d';
 export const GAIN_COLOR  = '#ffe066';
 export const MUTE_COLOR  = '#7a7f8e';
+// Effects pass auras (#54):
+//   squash : compressor — pumps and slams transients
+//   wobble : LFO trem + filter modulation — movement
+//   crush  : bitcrusher — lo-fi texture
+export const SQUASH_COLOR = '#7ad6ff';
+export const WOBBLE_COLOR = '#c478ff';
+export const CRUSH_COLOR  = '#ff5577';
 
 // === Small generic helpers ===
 export function makeHarmonicsArr() { return new Array(12).fill(0); }

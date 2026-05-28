@@ -194,6 +194,9 @@ function auraSettingsLine(aura) {
   if (k === 'drive')  return `drive ×${(aura.driveAmount || 0).toFixed(1)}`;
   if (k === 'gain')   return `boost ${(aura.gainAmount || 1).toFixed(2)}× at centre`;
   if (k === 'mute')   return `hush ${(aura.gainAmount || 0).toFixed(2)}× at centre`;
+  if (k === 'squash') return `squash ×${(aura.squashAmount || 0).toFixed(1)}`;
+  if (k === 'wobble') return `wobble ${(aura.wobbleRate || 0).toFixed(1)} Hz`;
+  if (k === 'crush')  return `crush ${aura.crushBits || 5}-bit`;
   return '';
 }
 

@@ -39,8 +39,13 @@ function renderForKind(kind) {
         <span class="bw-val" id="bw-radius-val">${s.maxRadius}px</span>
       </div>
       <div class="bw-row">
-        <label>speed</label>
-        <input type="range" id="bw-duration" min="0.25" max="4" step="0.25" value="${s.durationBars}">
+        <label>expand</label>
+        <input type="range" id="bw-expand" min="0.0625" max="2" step="0.0625" value="${s.expandBars}">
+        <span class="bw-val" id="bw-expand-val">${formatBars(s.expandBars)}</span>
+      </div>
+      <div class="bw-row">
+        <label>duration</label>
+        <input type="range" id="bw-duration" min="0.25" max="8" step="0.25" value="${s.durationBars}">
         <span class="bw-val" id="bw-duration-val">${formatBars(s.durationBars)}</span>
       </div>
     `;
@@ -68,12 +73,29 @@ function formatBars(b) {
 
 function wireInputs(kind) {
   const radius = panel.querySelector('#bw-radius');
+  const expand = panel.querySelector('#bw-expand');
   const dur = panel.querySelector('#bw-duration');
   if (radius) {
     radius.addEventListener('input', (e) => {
       const v = parseInt(e.target.value);
       state.bloomSettings[kind].maxRadius = v;
       panel.querySelector('#bw-radius-val').textContent = v + 'px';
+    });
+  }
+  if (expand) {
+    expand.addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value);
+      state.bloomSettings[kind].expandBars = v;
+      panel.querySelector('#bw-expand-val').textContent = formatBars(v);
+      // Duration can't be shorter than expansion — bump it up if the
+      // user dragged expand past current duration.
+      if (state.bloomSettings[kind].durationBars < v) {
+        state.bloomSettings[kind].durationBars = v;
+        const durInput = panel.querySelector('#bw-duration');
+        const durVal = panel.querySelector('#bw-duration-val');
+        if (durInput) durInput.value = v;
+        if (durVal) durVal.textContent = formatBars(v);
+      }
     });
   }
   if (dur) {

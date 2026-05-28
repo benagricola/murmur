@@ -22,6 +22,9 @@ export const KIND_LABELS = {
   drive:    'drive',    // soft-clip distortion territory
   gain:     'boost',    // volume amplification territory
   mute:     'hush',     // volume reduction territory
+  squash:   'squash',   // compressor — punch + pump
+  wobble:   'wobble',   // LFO modulation — movement
+  crush:    'crush',    // bitcrusher — lo-fi grit
   // Bloom kinds (radial one-shots — internal `pulse` category)
   drop:     'drop',
   muffle:   'muffle',

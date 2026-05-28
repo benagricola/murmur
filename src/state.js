@@ -30,10 +30,18 @@ export const state = {
   // audio/events.js spawnPulse / spawnSweep on every firing so live
   // edits take effect immediately. Edited via the bloom/wind config
   // window in src/bloom-wind-config.js.
+  // Blooms have two independent timings:
+  //   expandBars — how fast the shockwave reaches maxRadius
+  //   durationBars — total lifetime; the EFFECT FADES over the hold
+  //                  remainder (durationBars - expandBars) before the
+  //                  bloom pops. Earlier this was one knob; users
+  //                  asked for separate velocity vs persistence
+  //                  control so they could fire fast-expanding,
+  //                  long-fading drops or slow-creeping muffles.
   bloomSettings: {
-    drop:   { maxRadius: 320, durationBars: 1 },
-    muffle: { maxRadius: 360, durationBars: 1 },
-    thin:   { maxRadius: 360, durationBars: 1 },
+    drop:   { maxRadius: 320, expandBars: 0.25, durationBars: 1.5 },
+    muffle: { maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
+    thin:   { maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
   },
   windSettings: {
     rise: { durationBars: 4 },

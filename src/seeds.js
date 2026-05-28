@@ -13,6 +13,7 @@
 import {
   WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR,
   DRIVE_COLOR, GAIN_COLOR, MUTE_COLOR,
+  SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR,
   SEED_COLORS,
 } from './constants.js';
 import { BEAT_MS, BAR_MS } from './tempo.js';
@@ -203,6 +204,13 @@ export function makeSeed(opts) {
     // Drive / gain / mute aura kind-specific settings.
     driveAmount: opts.driveAmount !== undefined ? opts.driveAmount : 1.6,
     gainAmount:  opts.gainAmount  !== undefined ? opts.gainAmount  : 1.0,
+    // Effects-pass aura settings (#54). squash = compressor amount,
+    // wobble = LFO depth / rate, crush = bit depth / rate reduction.
+    squashAmount: opts.squashAmount !== undefined ? opts.squashAmount : 1.5,
+    wobbleRate:   opts.wobbleRate   !== undefined ? opts.wobbleRate   : 4.5,
+    wobbleDepth:  opts.wobbleDepth  !== undefined ? opts.wobbleDepth  : 0.6,
+    crushBits:    opts.crushBits    !== undefined ? opts.crushBits    : 5,
+    crushRate:    opts.crushRate    !== undefined ? opts.crushRate    : 0.35,
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
     attackFrac: attackMs / BAR_MS,
@@ -237,6 +245,9 @@ export function makeSeed(opts) {
       else if (seed.modifierKind === 'drive')  seed.color = DRIVE_COLOR;
       else if (seed.modifierKind === 'gain')   seed.color = GAIN_COLOR;
       else if (seed.modifierKind === 'mute')   seed.color = MUTE_COLOR;
+      else if (seed.modifierKind === 'squash') seed.color = SQUASH_COLOR;
+      else if (seed.modifierKind === 'wobble') seed.color = WOBBLE_COLOR;
+      else if (seed.modifierKind === 'crush')  seed.color = CRUSH_COLOR;
     } else {
       seed.color = (seed.role && TIMBRE_ROLES[seed.role])
         ? TIMBRE_ROLES[seed.role].color
@@ -264,6 +275,11 @@ export function removeSeed(id) {
   if (seed.kind === 'modifier') {
     if (seed.delayInput)  { try { seed.delayInput.disconnect();  } catch (e) {} }
     if (seed.reverbInput) { try { seed.reverbInput.disconnect(); } catch (e) {} }
+    if (seed.squashInput) { try { seed.squashInput.disconnect(); } catch (e) {} }
+    if (seed.wobbleInput) { try { seed.wobbleInput.disconnect(); } catch (e) {} }
+    if (seed.wobbleLFO)   { try { seed.wobbleLFO.stop();         } catch (e) {} }
+    if (seed.crushInput)  { try { seed.crushInput.disconnect();  } catch (e) {} }
+    if (seed.crushProcessor) { try { seed.crushProcessor.disconnect(); } catch (e) {} }
     for (const vid of seed.capturedSeedIds) {
       const v = seedById(vid);
       if (v) v.capturedByIds.delete(id);
@@ -474,34 +490,121 @@ export function renderSpheres() {
   }
 }
 
+// Tether particle streams — each (seed, aura) pair gets a small
+// stream of particles that flow from the seed's edge into the
+// aura's centre, suggesting material being drawn in. Particles
+// fade and shrink as they approach the aura (consumed). The
+// stream is rebuilt when the set of active pairs changes; the
+// per-frame `animateTethers` advances the particles along their
+// curves.
+//
+// Active streams cache:
+//   key  = `seedId-auraId`
+//   val  = { gNode, particles: [<circle>...], phases: [0..1...] }
+const PARTICLES_PER_STREAM = 5;
+const tetherStreams = new Map();
+
+function ensureTetherStream(key, v, m, intensity) {
+  let cached = tetherStreams.get(key);
+  if (!cached) {
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('pointer-events', 'none');
+    const particles = [];
+    const phases = [];
+    for (let i = 0; i < PARTICLES_PER_STREAM; i++) {
+      const c = document.createElementNS(SVGNS, 'circle');
+      c.setAttribute('r', '2.5');
+      g.appendChild(c);
+      particles.push(c);
+      phases.push(Math.random());   // stagger initial positions
+    }
+    tethersLayer.appendChild(g);
+    cached = { gNode: g, particles, phases };
+    tetherStreams.set(key, cached);
+  }
+  // Update colour + intensity-based opacity each render. Colour
+  // blends from seed → aura along the stream (set in animation).
+  for (const p of cached.particles) p.setAttribute('fill', m.color);
+  cached.gNode.dataset.intensity = intensity;
+  cached.gNode.dataset.vId = v.id;
+  cached.gNode.dataset.mId = m.id;
+  return cached;
+}
+
 export function renderTethers() {
-  tethersLayer.innerHTML = '';
-  // Tethers are drawn from each voice toward every aura whose
-  // intensity at that voice is above a visibility threshold. Opacity
-  // tracks intensity so an aura's edge produces a faint hint and the
-  // centre produces a fully-lit line.
+  // Mark which streams should exist this pass.
+  const wantedKeys = new Set();
   for (const v of seeds) {
     if (v.kind !== 'voice') continue;
     for (const m of seeds) {
       if (m.kind !== 'modifier') continue;
       const intensity = auraIntensityForSeed(m, v);
       if (intensity < 0.05) continue;
-      const path = document.createElementNS(SVGNS, 'path');
-      const ang = Math.atan2(m.cy - v.cy, m.cx - v.cx);
-      const ax = v.cx + v.r * PEAK_TIP_FACTOR * Math.cos(ang);
-      const ay = v.cy + v.r * PEAK_TIP_FACTOR * Math.sin(ang);
-      const bx = m.cx, by = m.cy;
-      const mx = (ax + bx) / 2, my = (ay + by) / 2;
-      const dx = bx - ax, dy = by - ay;
-      const len = Math.hypot(dx, dy);
-      const perpX = len ? -dy / len : 0, perpY = len ? dx / len : 0;
-      const sag = Math.min(len * 0.10, 24);
-      const ctrlX = mx + perpX * sag, ctrlY = my + perpY * sag;
-      path.setAttribute('d', `M ${ax.toFixed(1)} ${ay.toFixed(1)} Q ${ctrlX.toFixed(1)} ${ctrlY.toFixed(1)}, ${bx.toFixed(1)} ${by.toFixed(1)}`);
-      path.setAttribute('class', 'tether-' + m.modifierKind);
-      path.setAttribute('stroke', m.color);
-      path.setAttribute('opacity', intensity.toFixed(3));
-      tethersLayer.appendChild(path);
+      const key = `${v.id}-${m.id}`;
+      wantedKeys.add(key);
+      ensureTetherStream(key, v, m, intensity);
+    }
+  }
+  // Tear down streams whose pair is no longer active.
+  for (const [key, cached] of tetherStreams) {
+    if (wantedKeys.has(key)) continue;
+    cached.gNode.remove();
+    tetherStreams.delete(key);
+  }
+}
+
+// Per-frame particle advance. Called from scheduler.visualTick so
+// streams animate smoothly even when nothing is moving. Each
+// particle walks a quadratic Bezier from the seed's edge to the
+// aura's centre; on reaching 1.0 it wraps to 0.0 with a small
+// random jitter so the stream doesn't pulse in lockstep.
+export function animateTethers() {
+  for (const [key, cached] of tetherStreams) {
+    const vId = parseInt(cached.gNode.dataset.vId);
+    const mId = parseInt(cached.gNode.dataset.mId);
+    const v = seedById(vId);
+    const m = seedById(mId);
+    if (!v || !m) continue;
+    const intensity = parseFloat(cached.gNode.dataset.intensity) || 0;
+    // Stream geometry — anchor on the seed's edge in the aura's
+    // direction (matches the attachmentsForSeed peak), curve into
+    // the aura's centre.
+    const ang = Math.atan2(m.cy - v.cy, m.cx - v.cx);
+    const ax = v.cx + v.r * PEAK_TIP_FACTOR * Math.cos(ang);
+    const ay = v.cy + v.r * PEAK_TIP_FACTOR * Math.sin(ang);
+    const bx = m.cx, by = m.cy;
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    const perpX = len ? -dy / len : 0, perpY = len ? dx / len : 0;
+    const sag = Math.min(len * 0.12, 28);
+    const ctrlX = (ax + bx) / 2 + perpX * sag;
+    const ctrlY = (ay + by) / 2 + perpY * sag;
+    // Particles flow at a rate scaled by intensity — stronger
+    // gravity pulls material in faster. Roughly 1.5s end-to-end
+    // at full intensity, 4s at the edge.
+    const speed = (0.004 + 0.012 * intensity);
+    for (let i = 0; i < cached.particles.length; i++) {
+      let phase = cached.phases[i] + speed;
+      if (phase >= 1) {
+        phase -= 1 + Math.random() * 0.08;   // small jitter on wrap
+        if (phase < 0) phase = 0;
+      }
+      cached.phases[i] = phase;
+      // Quadratic Bezier evaluation P(t) = (1-t)²P0 + 2(1-t)t P1 + t² P2
+      const t = phase;
+      const u = 1 - t;
+      const px = u * u * ax + 2 * u * t * ctrlX + t * t * bx;
+      const py = u * u * ay + 2 * u * t * ctrlY + t * t * by;
+      const p = cached.particles[i];
+      p.setAttribute('cx', px.toFixed(1));
+      p.setAttribute('cy', py.toFixed(1));
+      // Fade + shrink as the particle approaches the aura — it's
+      // being absorbed. Plus a slight pulse near the seed-end so
+      // material READS as leaving the surface.
+      const fade = (1 - t) * 0.5 + 0.5;             // 1.0 at seed → 0.5 at aura
+      const shrink = (1 - t * 0.55).toFixed(2);     // shrink to 45% at aura
+      p.setAttribute('opacity', (intensity * fade).toFixed(3));
+      p.setAttribute('r', (2.5 * shrink));
     }
   }
 }

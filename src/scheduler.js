@@ -18,11 +18,11 @@ import { audioCtx } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
 import { patchFromLegacySeed } from './audio/patches.js';
 import {
-  routeFinalOutput, PULSE_KINDS, SWEEP_KINDS, pulseCurrentRadius,
+  routeFinalOutput, PULSE_KINDS, SWEEP_KINDS, pulseCurrentRadius, pulseEffectIntensity,
 } from './audio/events.js';
 import { seeds, activeEvents, state, seedById } from './state.js';
 import {
-  SVGNS, seedNodes, blobPath, renderSeed, renderTethers,
+  SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
   auraIntensityForSeed,
 } from './seeds.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
@@ -300,17 +300,31 @@ function physicsStep(silent) {
     let fx = 0, fy = 0;
     let maxImpactForce = 0;
     let impactPartner = null;
-    // Wanderlust drift — a smooth random walk force scaled by the
-    // seed's wanderlust setting. Direction changes every 0.5-2.0s
-    // depending on how restless the seed is, so motion looks
-    // organic rather than jittery.
+    // Wanderlust drift with INERTIAL direction changes. The seed
+    // picks a new TARGET direction at random intervals, but the
+    // applied force direction rotates smoothly TOWARD the target
+    // rather than snapping. Combined with mass and damping this
+    // gives a sweeping, swimmy quality — heavy seeds especially
+    // glide rather than tic-tac.
     if (a.wanderlust > 0) {
       if (a._wanderUntil == null || tnow > a._wanderUntil) {
-        a._wanderTheta = Math.random() * Math.PI * 2;
-        const changeMs = 500 + (1 - a.wanderlust) * 1500;
+        a._wanderTargetTheta = Math.random() * Math.PI * 2;
+        // Longer hold for low-wanderlust seeds (more committed
+        // direction). Heavier seeds also get longer holds — heft
+        // implies persistence.
+        const changeMs = (1200 + (1 - a.wanderlust) * 2500) * (0.7 + 0.3 * (a.mass || 1));
         a._wanderUntil = tnow + changeMs;
       }
-      const wf = 0.12 * a.wanderlust;
+      if (a._wanderTheta == null) a._wanderTheta = a._wanderTargetTheta;
+      // Smoothly rotate current direction toward target. The rate
+      // scales with wanderlust — restless seeds change quicker —
+      // but it's an angular SLERP, not an instant change.
+      const dTheta = ((a._wanderTargetTheta - a._wanderTheta + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+      a._wanderTheta += dTheta * (0.008 + 0.025 * a.wanderlust);
+      // Force is smaller than before (was 0.12) so seeds GLIDE
+      // rather than skitter. Inertia carries them between target
+      // reseeds.
+      const wf = 0.08 * a.wanderlust;
       fx += Math.cos(a._wanderTheta) * wf;
       fy += Math.sin(a._wanderTheta) * wf;
     }
@@ -455,6 +469,7 @@ function visualTick() {
   }
   updateEvents();
   renderEvents();
+  animateTethers();
   requestAnimationFrame(visualTick);
 }
 requestAnimationFrame(visualTick);
@@ -514,11 +529,21 @@ function updateEvents() {
             ev.affectedSeedIds.add(seed.id);
           }
         }
+        // Effect intensity = 1 during expansion, fades linearly across
+        // the hold remainder. We ramp the per-bloom wet gain so the
+        // filter audibly trails off instead of cutting at pop.
+        if (ev.filterWetGain && audioCtx) {
+          const intensity = pulseEffectIntensity(ev);
+          ev.filterWetGain.gain.setTargetAtTime(intensity, audioCtx.currentTime, 0.04);
+        }
         if (elapsed >= ev.durationMs) {
           ev.state = 'popped';
           ev.popTimeMs = tnow;
           if (ev.filterNode) {
             try { ev.filterNode.disconnect(); } catch (e) {}
+          }
+          if (ev.filterWetGain) {
+            try { ev.filterWetGain.disconnect(); } catch (e) {}
           }
           for (const id of ev.affectedSeedIds) {
             const s = seedById(id);
@@ -577,11 +602,15 @@ function renderEvents() {
     if (ev.type === 'pulse') {
       if (ev.state === 'expanding') {
         const r = pulseCurrentRadius(ev);
+        // Visual opacity tracks effect intensity — full during the
+        // growth phase, fading during the hold so the user can SEE
+        // the bloom releasing its grip before it actually pops.
+        const vis = pulseEffectIntensity(ev);
         const fill = document.createElementNS(SVGNS, 'circle');
         fill.setAttribute('cx', ev.cx); fill.setAttribute('cy', ev.cy);
         fill.setAttribute('r', r);
         fill.setAttribute('fill', ev.color);
-        fill.setAttribute('fill-opacity', 0.12);
+        fill.setAttribute('fill-opacity', (0.12 * vis).toFixed(3));
         eventsLayer.appendChild(fill);
         const ring = document.createElementNS(SVGNS, 'circle');
         ring.setAttribute('cx', ev.cx); ring.setAttribute('cy', ev.cy);
@@ -589,7 +618,7 @@ function renderEvents() {
         ring.setAttribute('fill', 'none');
         ring.setAttribute('stroke', ev.color);
         ring.setAttribute('stroke-width', 3);
-        ring.setAttribute('stroke-opacity', 0.85);
+        ring.setAttribute('stroke-opacity', (0.85 * (0.4 + 0.6 * vis)).toFixed(3));
         eventsLayer.appendChild(ring);
       } else if (ev.state === 'popped') {
         const since = tnow - ev.popTimeMs;

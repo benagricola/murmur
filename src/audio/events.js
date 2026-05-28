@@ -14,10 +14,14 @@ import { activeEvents, seeds, state, seedById } from '../state.js';
 import { BAR_MS } from '../tempo.js';
 import { auraIntensityForSeed } from '../seeds.js';
 
+// PULSE_KINDS defaults — expandBars sets the shockwave velocity (how
+// many bars until maxRadius is reached); durationBars sets total
+// lifetime, with the effect fading linearly over the hold remainder
+// before popping. Spawn-time tunables in state.bloomSettings override.
 export const PULSE_KINDS = {
-  drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, durationBars: 1 },
-  muffle: { label: 'muffle', color: '#5e7ad8', maxRadius: 360, durationBars: 1 },
-  thin:   { label: 'thin',   color: '#ffd84d', maxRadius: 360, durationBars: 1 },
+  drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, expandBars: 0.25, durationBars: 1.5 },
+  muffle: { label: 'muffle', color: '#5e7ad8', maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
+  thin:   { label: 'thin',   color: '#ffd84d', maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
 };
 
 // Sweeps are directional lines that travel from start→end over a fixed
@@ -32,8 +36,26 @@ export const SWEEP_KINDS = {
 export function pulseCurrentRadius(ev) {
   if (ev.state !== 'expanding') return ev.maxRadius;
   const elapsedMs = performance.now() - ev.startTimeMs;
-  const phase = Math.min(1, elapsedMs / ev.durationMs);
+  // Two-phase: grow during expandMs, then hold at maxRadius until pop.
+  // Without expandMs (legacy events) fall back to old single-phase
+  // ramp over durationMs.
+  const expandMs = ev.expandMs != null ? ev.expandMs : ev.durationMs;
+  const phase = Math.min(1, elapsedMs / Math.max(1, expandMs));
   return ev.maxRadius * phase;
+}
+
+// 1.0 during expansion, then linearly fades to 0 across the hold
+// remainder before the pop. Used to scale visual opacity and the
+// audio wet/dry of filter-style blooms so the effect "trails off"
+// instead of cutting hard.
+export function pulseEffectIntensity(ev) {
+  if (ev.state !== 'expanding') return 0;
+  const elapsed = performance.now() - ev.startTimeMs;
+  const expandMs = ev.expandMs != null ? ev.expandMs : ev.durationMs;
+  const total = ev.durationMs;
+  if (elapsed <= expandMs) return 1;
+  const holdMs = Math.max(1, total - expandMs);
+  return Math.max(0, 1 - (elapsed - expandMs) / holdMs);
 }
 
 // Return any pulses whose current radius reaches this seed's edge.
@@ -116,6 +138,21 @@ export function routeFinalOutput(seed, node) {
         g.gain.value = intensity;
         node.connect(g);
         g.connect(m.driveInput);
+      } else if (m.modifierKind === 'squash' && m.squashInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.squashInput);
+      } else if (m.modifierKind === 'wobble' && m.wobbleInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.wobbleInput);
+      } else if (m.modifierKind === 'crush' && m.crushInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.crushInput);
       }
     }
   }
@@ -142,7 +179,12 @@ export function spawnPulse(cx, cy, kindKey) {
   // patching the def in-place. Falls back to def if no override exists.
   const tune = (state.bloomSettings && state.bloomSettings[kindKey]) || {};
   const maxRadius = tune.maxRadius != null ? tune.maxRadius : def.maxRadius;
+  const expandBars = tune.expandBars != null ? tune.expandBars : def.expandBars;
   const durationBars = tune.durationBars != null ? tune.durationBars : def.durationBars;
+  // Pop must come after expansion completes — clamp duration up if a
+  // user dialled it absurdly small. expandBars is the minimum.
+  const expandMs = Math.max(50, expandBars * BAR_MS);
+  const durationMs = Math.max(expandMs + 50, durationBars * BAR_MS);
   const ev = {
     id: state.nextEventId++,
     type: 'pulse',
@@ -150,28 +192,36 @@ export function spawnPulse(cx, cy, kindKey) {
     color: def.color,
     cx, cy,
     maxRadius,
-    durationMs: durationBars * BAR_MS,
+    expandMs,
+    durationMs,
     startTimeMs: performance.now(),
     state: 'expanding',           // 'expanding' → 'popped' → 'done'
     popTimeMs: null,
     affectedSeedIds: new Set(),
     filterNode: null,
+    filterWetGain: null,
   };
   if (audioCtx && masterGain) {
-    if (kindKey === 'muffle') {
+    if (kindKey === 'muffle' || kindKey === 'thin') {
       const f = audioCtx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = 380;
+      if (kindKey === 'muffle') {
+        f.type = 'lowpass';
+        f.frequency.value = 380;
+      } else {
+        f.type = 'highpass';
+        f.frequency.value = 2400;
+      }
       f.Q.value = 0.9;
-      f.connect(masterGain);
+      // Wet-only gain after the filter so we can fade the filter's
+      // contribution to zero during the hold phase. Voices still
+      // route to the filter while it's connected; the gain envelope
+      // is what actually fades the effect away.
+      const wet = audioCtx.createGain();
+      wet.gain.value = 1;
+      f.connect(wet);
+      wet.connect(masterGain);
       ev.filterNode = f;
-    } else if (kindKey === 'thin') {
-      const f = audioCtx.createBiquadFilter();
-      f.type = 'highpass';
-      f.frequency.value = 2400;
-      f.Q.value = 0.9;
-      f.connect(masterGain);
-      ev.filterNode = f;
+      ev.filterWetGain = wet;
     }
   }
   activeEvents.push(ev);

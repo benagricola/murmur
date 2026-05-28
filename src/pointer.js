@@ -15,7 +15,6 @@ import { state, seeds, seedById } from './state.js';
 import {
   canvasEl, canvasWrap, SVGNS,
   makeSeed, syncRenderedSeeds, renderSeed, renderSpheres, renderTethers,
-  radiusForFundamental,
 } from './seeds.js';
 import { setupModifierChain } from './audio/chains.js';
 import {
@@ -75,55 +74,23 @@ function startTap(c) {
     plantModifierAt(c);
     return;
   }
-  // Voice mode: plant one seed immediately at the click point with
-  // the role's default pattern. The earlier tap-buffer melody
-  // capture (multiple clicks → pitched pattern, after 1.4s timeout)
-  // was removed — recording melodies now goes through the MIDI
-  // device + on-screen keyboard exclusively, which gives clearer
-  // semantic intent and works the same on every input source.
-  plantVoiceSeedAt(c);
-}
-
-function plantVoiceSeedAt(c) {
-  const role = TIMBRE_ROLES[activeRole] || TIMBRE_ROLES.melody;
-  const gen = role.generate();
-  // Pitch from Y position, biased into role's natural range.
-  // Top of canvas = +1 octave, bottom = -1 octave from default.
-  const yNorm = Math.max(0, Math.min(1, c.y / 800));
-  const fundamental = gen.fundamentalHz * Math.pow(2, (0.5 - yNorm) * 1.6);
-  const r = radiusForFundamental(fundamental);
-  const labels = ['little wisp', 'soft hum', 'echo bone', 'spark', 'glimmer', 'small stone', 'feather', 'dapple', 'flicker', 'reed'];
-  const label = labels[Math.floor(Math.random() * labels.length)];
-  const seed = makeSeed({
-    cx: c.x, cy: c.y, r,
-    fundamental: Math.round(fundamental),
-    decay: Math.round(gen.decay),
-    intervalMs: Math.round(gen.intervalMs),
-    harmonics: gen.harmonics,
-    color: role.color,
-    label,
-    pattern: [{ offset: 0, velocity: 1.0 }],   // single-step default
-    role: activeRole,
-    synthesisModel: gen.synthesisModel,
-    attackMs: gen.attackMs,
-    patch: gen.patch,
-    quantize: true,
-  });
-  for (const m of seeds.filter(s => s.kind === 'modifier')) {
-    const d = Math.hypot(seed.cx - m.cx, seed.cy - m.cy);
-    if (d < m.sphereR) {
-      seed.capturedByIds.add(m.id);
-      m.capturedSeedIds.add(seed.id);
-    }
-  }
-  syncRenderedSeeds();
-  selectSeed(seed.id);
-  takeSnapshot('planted ' + label);
+  // Voice mode + empty canvas → no-op. Voices are planted via MIDI
+  // device or on-screen keyboard (which gives the pattern its pitch
+  // and rhythm in one gesture). Earlier we tap-planted a single-step
+  // seed here, but it produced unintended seeds whenever the user
+  // clicked the canvas to dismiss something else, and a one-note
+  // voice has no useful information.
 }
 
 function plantModifierAt(c) {
   const modKind = state.plantMode;
-  const baseR = modKind === 'weave' ? 30 : (modKind === 'ripple' ? 26 : (modKind === 'poly' ? 28 : 32));
+  const baseR = modKind === 'weave' ? 30
+              : modKind === 'ripple' ? 26
+              : modKind === 'poly' ? 28
+              : modKind === 'wobble' ? 30
+              : modKind === 'squash' ? 34
+              : modKind === 'crush' ? 28
+              : 32;
   // Tiny harmonic shape per modifier kind so the blob silhouette hints
   // at character even before any voices are captured.
   const harmonics = new Array(12).fill(0);
@@ -133,6 +100,9 @@ function plantModifierAt(c) {
   else if (modKind === 'drive')  { harmonics[0] = 0.10; harmonics[2] = 0.07; harmonics[6] = 0.05; }
   else if (modKind === 'gain')   { harmonics[0] = 0.08; harmonics[1] = 0.06; }
   else if (modKind === 'mute')   { harmonics[3] = 0.04; harmonics[5] = 0.03; }
+  else if (modKind === 'squash') { harmonics[0] = 0.12; harmonics[1] = 0.04; }  // squat, dense
+  else if (modKind === 'wobble') { harmonics[1] = 0.09; harmonics[2] = 0.06; harmonics[3] = 0.04; }  // undulating
+  else if (modKind === 'crush')  { harmonics[4] = 0.08; harmonics[8] = 0.06; }  // jagged step
   else                            { harmonics[1] = 0.03; harmonics[3] = 0.02; }
   const seed = makeSeed({
     kind: 'modifier', modifierKind: modKind,

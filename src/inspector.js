@@ -11,7 +11,7 @@ import {
 } from './constants.js';
 import { audioCtx, NUM_HARMONICS } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
-import { createReverbIR } from './audio/chains.js';
+import { createReverbIR, makeDriveCurve, makeBitCrushCurve } from './audio/chains.js';
 import { TIMBRE_ROLES } from './timbres.js';
 import { seeds, seedById, state } from './state.js';
 import {
@@ -209,16 +209,8 @@ export function selectSeed(id) {
       DRIVE_OPTIONS,
       (opt) => {
         seed.driveAmount = opt.val;
-        // Rebuild the waveshaper curve with the new amount.
         if (seed.driveShaper && audioCtx) {
-          const N = 2048;
-          const arr = new Float32Array(N);
-          const k = 1 + opt.val * 4;
-          for (let i = 0; i < N; i++) {
-            const x = (i / (N - 1)) * 2 - 1;
-            arr[i] = Math.tanh(x * k);
-          }
-          seed.driveShaper.curve = arr;
+          seed.driveShaper.curve = makeDriveCurve(opt.val);
         }
         takeSnapshotFn('drive: ' + opt.label);
       },
@@ -250,6 +242,100 @@ export function selectSeed(id) {
         let best = 0, bestDiff = Infinity;
         for (let i = 0; i < GAIN_OPTIONS.length; i++) {
           const d = Math.abs(GAIN_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'squash') {
+    document.querySelector('#rhythm-row label').textContent = 'squash';
+    const SQUASH_OPTIONS = [
+      { label: 'glue',  val: 0.7 },
+      { label: 'pump',  val: 1.2 },
+      { label: 'slam',  val: 1.8 },
+      { label: 'crush', val: 2.5 },
+      { label: 'brick', val: 3.2 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      SQUASH_OPTIONS,
+      (opt) => {
+        seed.squashAmount = opt.val;
+        if (seed.squashComp && audioCtx) {
+          seed.squashComp.threshold.setTargetAtTime(-30 - opt.val * 4, audioCtx.currentTime, 0.02);
+          seed.squashComp.ratio.setTargetAtTime(6 + opt.val * 4, audioCtx.currentTime, 0.02);
+          if (seed.squashMakeup) {
+            seed.squashMakeup.gain.setTargetAtTime(1 + opt.val * 0.8, audioCtx.currentTime, 0.02);
+          }
+          if (seed.squashInput) {
+            seed.squashInput.gain.setTargetAtTime(1 + opt.val * 0.5, audioCtx.currentTime, 0.02);
+          }
+        }
+        takeSnapshotFn('squash: ' + opt.label);
+      },
+      () => {
+        const v = seed.squashAmount != null ? seed.squashAmount : 1.5;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < SQUASH_OPTIONS.length; i++) {
+          const d = Math.abs(SQUASH_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'wobble') {
+    document.querySelector('#rhythm-row label').textContent = 'wobble rate';
+    const WOBBLE_OPTIONS = [
+      { label: 'slow',  val: 1.5 },
+      { label: 'mid',   val: 3.0 },
+      { label: 'fast',  val: 4.5 },
+      { label: 'rapid', val: 7.0 },
+      { label: 'manic', val: 12.0 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      WOBBLE_OPTIONS,
+      (opt) => {
+        seed.wobbleRate = opt.val;
+        if (seed.wobbleLFO && audioCtx) {
+          seed.wobbleLFO.frequency.setTargetAtTime(opt.val, audioCtx.currentTime, 0.02);
+        }
+        takeSnapshotFn('wobble rate: ' + opt.label);
+      },
+      () => {
+        const v = seed.wobbleRate != null ? seed.wobbleRate : 4.5;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < WOBBLE_OPTIONS.length; i++) {
+          const d = Math.abs(WOBBLE_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'crush') {
+    document.querySelector('#rhythm-row label').textContent = 'crush';
+    const CRUSH_OPTIONS = [
+      { label: '8-bit', val: 8 },
+      { label: '6-bit', val: 6 },
+      { label: '5-bit', val: 5 },
+      { label: '4-bit', val: 4 },
+      { label: '3-bit', val: 3 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      CRUSH_OPTIONS,
+      (opt) => {
+        seed.crushBits = opt.val;
+        if (seed.crushShaper && audioCtx) {
+          seed.crushShaper.curve = makeBitCrushCurve(opt.val);
+        }
+        takeSnapshotFn('crush: ' + opt.label);
+      },
+      () => {
+        const v = seed.crushBits != null ? seed.crushBits : 5;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < CRUSH_OPTIONS.length; i++) {
+          const d = Math.abs(CRUSH_OPTIONS[i].val - v);
           if (d < bestDiff) { bestDiff = d; best = i; }
         }
         return best;
