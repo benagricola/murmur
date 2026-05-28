@@ -85,6 +85,24 @@ function notes16(offsets) {
     : { offset: o, velocity: 0.85 });
 }
 
+// Attach extra pattern variants to a seed's bank. The seed's initial
+// pattern stays as bank[0]; each provided steps array appends as a
+// further variant with equal weight. The scheduler weighted-rolls
+// between them at each loop boundary — see scheduler.maybeRollPatternBank.
+function addVariants(seed, ...stepsArrays) {
+  if (!seed.patternBank) {
+    seed.patternBank = [{ id: 'orig', steps: seed.pattern, weight: 1 }];
+  }
+  for (const steps of stepsArrays) {
+    seed.patternBank.push({
+      id: Math.random().toString(36).slice(2, 8),
+      steps,
+      weight: 1,
+    });
+  }
+  return seed;
+}
+
 // === Style: TECHNO (128 BPM) =================================
 // Hammered four-on-floor, offbeat open hat, snare on 2 + 4, walking
 // minor-key bass, sparse lead stab, slow chord pad. Weave gives the
@@ -141,11 +159,26 @@ function plantTechno() {
     pattern: notes16([0, null, 0, null, 7, null, 0, null,
                        0, null, 12, null, 7, null, 5, null]),
   });
-  timbredSeed('melody', {
+  const techStab = timbredSeed('melody', {
     cx: 1080, cy: 320, r: 44, fundamental: 392,
     intervalMs: stepMs, gain: 0.28, label: 'stab',
     pattern: notes16([0, null, null, null, null, null, null, 7,
                        null, null, null, null, 5, null, null, null]),
+  });
+  // Two more stab phrasings — shift aura below cycles between them.
+  addVariants(techStab,
+    notes16([0, null, 7, null, null, null, 5, null,
+             null, null, 0, null, null, 3, null, null]),
+    notes16([null, null, 0, null, 5, null, null, 7,
+             null, null, null, 3, null, null, 0, null]),
+  );
+  makeSeed({
+    kind: 'modifier', modifierKind: 'shift',
+    cx: 1060, cy: 360, r: 30, sphereR: 180,
+    centerIntensity: 1.0, edgeIntensity: 0,
+    intervalMs: BEAT_MS,
+    harmonics: makeHarmonics({ 4: 0.07, 5: 0.05, 7: 0.04 }),
+    label: 'shift',
   });
   timbredSeed('voice', {
     cx: 460, cy: 200, r: 62, fundamental: 196,
@@ -217,11 +250,25 @@ function plantDnB() {
     pattern: notes16([0, null, null, null, null, null, null, null,
                        0, null, null, null, -3, null, null, null]),
   });
-  timbredSeed('melody', {
+  const dnbLead = timbredSeed('melody', {
     cx: 1080, cy: 360, r: 42, fundamental: 440,
     intervalMs: stepMs, gain: 0.22, label: 'lead',
     pattern: notes16([null, null, null, 7, null, null, null, 5,
                        null, null, null, 3, null, null, null, 0]),
+  });
+  addVariants(dnbLead,
+    notes16([7, null, null, null, 5, null, null, null,
+             3, null, null, null, 0, null, null, null]),
+    notes16([null, 0, null, null, null, 3, null, null,
+             null, 5, null, null, null, 7, null, null]),
+  );
+  makeSeed({
+    kind: 'modifier', modifierKind: 'shift',
+    cx: 1060, cy: 420, r: 30, sphereR: 180,
+    centerIntensity: 1.0, edgeIntensity: 0,
+    intervalMs: BEAT_MS,
+    harmonics: makeHarmonics({ 4: 0.07, 5: 0.05, 7: 0.04 }),
+    label: 'shift',
   });
   timbredSeed('voice', {
     cx: 460, cy: 220, r: 62, fundamental: 165,  // E3
@@ -283,7 +330,7 @@ function plantDub() {
       { offset: -3, velocity: 0.85, duration: 0.9 },
     ],
   });
-  timbredSeed('voice', {
+  const dubStab = timbredSeed('voice', {
     cx: 1080, cy: 360, r: 48, fundamental: 220,
     decay: 800, intervalMs: stepMs, gain: 0.22, label: 'stab',
     // Two offbeat chord stabs per bar
@@ -305,6 +352,31 @@ function plantDub() {
       { offset: 0, velocity: 0 }, { offset: 0, velocity: 0 },
       { offset: 0, velocity: 0 },
     ],
+  });
+  // Dub stab variants — same chord shapes at different positions in
+  // the bar, so the shift aura produces a "wandering" feel rather
+  // than a melodic line change.
+  const rest = () => ({ offset: 0, velocity: 0 });
+  const chord = (root) => ({
+    offset: root, velocity: 0.85, duration: 0.4,
+    extras: [{ offset: root + 3, velocity: 0.75, duration: 0.4 },
+             { offset: root + 7, velocity: 0.70, duration: 0.4 }],
+  });
+  addVariants(dubStab,
+    // Variant 2: 3 + 11 + 14 — busier dub-skanking feel
+    [rest(), rest(), rest(), chord(0), rest(), rest(), rest(), rest(),
+     rest(), rest(), rest(), chord(-2), rest(), rest(), chord(2), rest()],
+    // Variant 3: shifted to off-beats (2 + 7 + 13)
+    [rest(), rest(), chord(-3), rest(), rest(), rest(), rest(), chord(2),
+     rest(), rest(), rest(), rest(), rest(), chord(0), rest(), rest()],
+  );
+  makeSeed({
+    kind: 'modifier', modifierKind: 'shift',
+    cx: 1060, cy: 440, r: 30, sphereR: 180,
+    centerIntensity: 1.0, edgeIntensity: 0,
+    intervalMs: BEAT_MS,
+    harmonics: makeHarmonics({ 4: 0.07, 5: 0.05, 7: 0.04 }),
+    label: 'shift',
   });
   timbredSeed('voice', {
     cx: 460, cy: 200, r: 62, fundamental: 110,
