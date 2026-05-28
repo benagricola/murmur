@@ -113,7 +113,15 @@ export function tryCreateContext() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) { showAudioStatus('no web audio api', 'error'); return false; }
-    audioCtx = new Ctx();
+    // latencyHint: 'interactive' asks the browser for the smallest
+    // available audio buffer. Default is 'balanced' (power-conserving,
+    // larger buffer) which produced ~180ms on Firefox-based browsers
+    // here. 'interactive' typically drops to 20-50ms on the same
+    // hardware. We're not aware of any voice in this app that needs
+    // a huge buffer to render cleanly — there's headroom to take the
+    // hit if a slower machine struggles, but the trade-off is worth
+    // it for a live-playable feel.
+    audioCtx = new Ctx({ latencyHint: 'interactive' });
     // Master chain: masterGain → masterLimiter → destination.
     // The limiter is a high-ratio compressor that catches transient
     // peaks above ~-2 dBFS so a loud chord or a hot drum hit doesn't
