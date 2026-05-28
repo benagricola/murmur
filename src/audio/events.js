@@ -68,13 +68,19 @@ export function routeFinalOutput(seed, node) {
     if (filterBomb) {
       node.connect(filterBomb.filterNode);
     } else {
-      // Both single-drum patches and drum-kit recordings (one seed,
-      // pattern steps reference DRUM_KIT slots) route through drumBus
-      // so they share the kit-glue compressor with everything else
-      // percussive.
+      // Per-seed postGain node lets us briefly duck a seed on
+      // collision impact (set up here lazily on first route).
+      // Connects directly to the right destination once; subsequent
+      // notes from the seed go through the same postGain.
       const cat = seed.patch && seed.patch.category;
       const isDrum = cat === 'drum' || cat === 'drum-kit';
-      node.connect(isDrum && drumBus ? drumBus : masterGain);
+      const dest = isDrum && drumBus ? drumBus : masterGain;
+      if (!seed.postGain && audioCtx) {
+        seed.postGain = audioCtx.createGain();
+        seed.postGain.gain.value = 1.0;
+        seed.postGain.connect(dest);
+      }
+      node.connect(seed.postGain || dest);
     }
     // Proximity-graded ripple / cloud sends. For every aura on the
     // canvas, compute its intensity at this seed's position and route

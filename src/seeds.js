@@ -226,6 +226,8 @@ export function removeSeed(id) {
   // this, scheduled notes already in the Web Audio queue would play
   // out their full envelope after the seed is gone.
   forceStopByTag(id);
+  // Disconnect the seed's persistent postGain so nothing leaks.
+  if (seed.postGain) { try { seed.postGain.disconnect(); } catch (e) {} seed.postGain = null; }
   // Disconnect modifier audio chains owned by this seed (delay/reverb
   // inputs) so their tails go silent rather than ringing into masterGain.
   if (seed.kind === 'modifier') {

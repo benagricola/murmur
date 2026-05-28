@@ -27,6 +27,7 @@ import { BEAT_MS, BAR_MS } from './tempo.js';
 import { setBPM } from './transport.js';
 import { makeSeed, syncRenderedSeeds } from './seeds.js';
 import { takeSnapshot } from './snapshots.js';
+import { settlePhysics } from './scheduler.js';
 import { tryCreateContext } from './audio/context.js';
 import { setupMIDI } from './input.js';
 import { TIMBRE_ROLES } from './timbres.js';
@@ -379,6 +380,11 @@ export function rollDemo(styleName) {
   wipeCanvas();
   const planted = plant();
   lastStyle = planted;
+  // Let the physics simulation pre-settle the layout so any
+  // demo-spec collisions resolve before anything renders. Without
+  // this the user would see the seeds visibly drift apart on first
+  // load — settled positions look intentional.
+  settlePhysics(50);
   syncRenderedSeeds();
   takeSnapshot('demo · ' + planted, true);
   return planted;

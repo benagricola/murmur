@@ -271,11 +271,34 @@ const PHYSICS_MAX_V = 4.0;
 let draggedSeedId = null;
 export function setDraggedSeed(id) { draggedSeedId = id; }
 
-function physicsStep() {
+function duckSeed(seed) {
+  if (!seed.postGain || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const g = seed.postGain.gain;
+  try {
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(0.35, now + 0.008);   // dip
+    g.linearRampToValueAtTime(1.0,  now + 0.18);    // recover
+  } catch (e) {}
+}
+
+// Exported so demo / future bulk-plant code can pre-settle layouts
+// before the user sees them — call settlePhysics(40) right after
+// planting and the seeds will have separated into a stable
+// configuration by the time anything renders.
+export function settlePhysics(iterations = 40) {
+  for (let i = 0; i < iterations; i++) physicsStep(true);
+}
+
+function physicsStep(silent) {
+  const tnow = performance.now();
   // Compute repulsion forces. O(N²) but N is small (~25 worst case).
   for (const a of seeds) {
     if (a.id === draggedSeedId) continue;
     let fx = 0, fy = 0;
+    let maxImpactForce = 0;
+    let impactPartner = null;
     for (const b of seeds) {
       if (b === a) continue;
       const dx = a.cx - b.cx;
@@ -297,6 +320,17 @@ function physicsStep() {
       const force = overlap * 0.18;
       fx += nx * force;
       fy += ny * force;
+      // Track strongest impact this tick — fires a duck if the
+      // collision is "energetic" enough and not in cooldown.
+      if (force > maxImpactForce) { maxImpactForce = force; impactPartner = b; }
+    }
+    // Duck on energetic collision. Cooldown prevents repeated duck
+    // while two seeds are sustained-touching (e.g. just placed too
+    // close and physics is gently nudging them apart).
+    if (maxImpactForce > 0.6 && tnow > (a._duckUntil || 0)) {
+      duckSeed(a);
+      if (impactPartner) duckSeed(impactPartner);
+      a._duckUntil = tnow + 250;
     }
     // Canvas-edge reflection — soft inward force when close to a wall.
     if (a.cx < CANVAS_MARGIN)              fx += (CANVAS_MARGIN - a.cx) * 0.10;
@@ -313,7 +347,9 @@ function physicsStep() {
     if (a.vy < -PHYSICS_MAX_V) a.vy = -PHYSICS_MAX_V;
   }
   // Apply integration as a second pass so all forces are computed
-  // from the same configuration (no order-dependent leakage).
+  // from the same configuration (no order-dependent leakage). In
+  // silent mode (pre-settle) we skip the DOM updates and rely on
+  // the caller to syncRenderedSeeds() at the end.
   let anyMoved = false;
   for (const a of seeds) {
     if (a.id === draggedSeedId) continue;
@@ -321,10 +357,12 @@ function physicsStep() {
     a.cx += a.vx;
     a.cy += a.vy;
     anyMoved = true;
-    const node = seedNodes.get(a.id);
-    if (node) renderSeed(a);
+    if (!silent) {
+      const node = seedNodes.get(a.id);
+      if (node) renderSeed(a);
+    }
   }
-  if (anyMoved) renderTethers();
+  if (anyMoved && !silent) renderTethers();
 }
 
 function visualTick() {
