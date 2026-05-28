@@ -62,6 +62,7 @@
       <div class="plant-opt" data-kind="squash"><span class="dot"></span>squash</div>
       <div class="plant-opt" data-kind="wobble"><span class="dot"></span>wobble</div>
       <div class="plant-opt" data-kind="crush"><span class="dot"></span>crush</div>
+      <div class="plant-opt" data-kind="shift"><span class="dot"></span>shift</div>
       <div class="tool-heading">Blooms</div>
       <div class="plant-opt event-opt" data-kind="drop"><span class="dot"></span>drop</div>
       <div class="plant-opt event-opt" data-kind="muffle"><span class="dot"></span>muffle</div>
@@ -139,6 +140,8 @@
     </div>
     <button class="regen-btn" id="regen-btn">🎲 regenerate sound</button>
 
+    <div id="template-edit" style="display: none;"></div>
+
     <div class="pitch-row" id="pitch-row">
       <label>pitch</label>
       <input type="range" class="std" id="pitch-slider" min="24" max="96" step="1" value="55">
@@ -196,6 +199,11 @@
       <div class="pattern-meta">
         <span id="pattern-len-info">4 steps</span>
         <span id="pattern-loop-info">5.0s loop</span>
+      </div>
+      <div class="variation-row" id="variation-row">
+        <span id="variation-info">var 1/1</span>
+        <button class="regen-btn" id="variation-add-btn" style="margin: 4px 0;">+ save as variation</button>
+        <button class="regen-btn" id="variation-remove-btn" style="margin: 0; display: none;">remove this variation</button>
       </div>
     </div>
 

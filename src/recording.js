@@ -90,6 +90,12 @@ export function finishRecording() {
   const sel = seedById(state.selectedSeedId);
   if (sel && sel.kind === 'voice') {
     sel.pattern = result.pattern;
+    // Keep the bank in sync: the current variant's steps reference
+    // must always match seed.pattern, otherwise the next loop boundary
+    // would replay the OLD pre-rewrite steps.
+    if (sel.patternBank && sel.patternBank[sel.patternBankIdx]) {
+      sel.patternBank[sel.patternBankIdx].steps = result.pattern;
+    }
     sel.intervalMs = result.intervalMs;
     sel.fundamental = result.fundamental;
     sel.r = radiusForFundamental(sel.fundamental);

@@ -71,6 +71,8 @@ export function selectSeed(id) {
   if (!seed) return;
   inspectorEl.dataset.mode = 'seed';
   state.selectedSeedId = id;
+  const tmplEdit = document.getElementById('template-edit');
+  if (tmplEdit) tmplEdit.style.display = 'none';
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
   // Sub-line: "aura · ripple" or "seed · melody · amber willow".
@@ -345,6 +347,11 @@ export function selectSeed(id) {
         return best;
       }
     );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'shift') {
+    // Shift aura has no kind-specific param — its strength is purely
+    // proximity-based (centerIntensity slider in the modifier-common
+    // block). Hide the rhythm row entirely.
+    document.getElementById('rhythm-row').style.display = 'none';
   } else if (seed.kind === 'modifier' && seed.modifierKind === 'mute') {
     document.querySelector('#rhythm-row label').textContent = 'hush';
     const MUTE_OPTIONS = [
@@ -530,6 +537,17 @@ function updatePatternLoopInfo(seed) {
     chordCount > 0 ? `${stepLabel} · ${chordCount} chord${chordCount > 1 ? 's' : ''}` : stepLabel;
   document.getElementById('pattern-loop-info').textContent =
     ((seed.pattern.length * seed.intervalMs) / 1000).toFixed(1) + 's loop';
+  updateVariationInfo(seed);
+}
+
+function updateVariationInfo(seed) {
+  const info = document.getElementById('variation-info');
+  const removeBtn = document.getElementById('variation-remove-btn');
+  if (!info) return;
+  const bank = seed.patternBank || [];
+  const idx = (seed.patternBankIdx || 0) + 1;
+  info.textContent = `var ${idx}/${bank.length}`;
+  if (removeBtn) removeBtn.style.display = bank.length > 1 ? '' : 'none';
 }
 
 function renderPatternEditor(seed) {
@@ -849,6 +867,79 @@ export function showLiveTemplate() {
     },
     () => Math.max(0, LIVE_TIMBRE_CYCLE_ROLES.indexOf(role)),
   );
+
+  renderTemplateEditRows(t);
+}
+
+// Editable params for the active liveTimbre. Attack + release are
+// universal across every patch shape. Per-layer gain shows one slider
+// per layer so the user can mix the additive's body against the FM
+// bell tail (etc.) without re-rolling. Mutations apply to the live
+// patch object in place; the next keypress reflects them.
+function renderTemplateEditRows(t) {
+  const host = document.getElementById('template-edit');
+  if (!host) return;
+  if (!t || !t.patch) { host.style.display = 'none'; return; }
+  host.style.display = '';
+
+  const patch = t.patch;
+  const env = patch.envelope || (patch.envelope = { attackMs: 8, releaseMs: 400 });
+  const attack = Math.round(env.attackMs);
+  const release = Math.round(env.releaseMs);
+
+  // Layer rows are dynamic — each patch shape has 1..3 layers with
+  // different voice types. We just show "layer N · voiceType" with a
+  // gain slider.
+  const layerRows = (patch.layers || []).map((layer, i) => {
+    const g = Math.round((layer.gain != null ? layer.gain : 1) * 100);
+    return `
+      <div class="pitch-row template-layer-row" data-layer-idx="${i}">
+        <label>${escapeHtml(layer.voice || 'layer')} ${i + 1}</label>
+        <input type="range" class="std" min="0" max="200" step="1" value="${g}" data-layer-slider="${i}">
+        <span class="pitch-val" data-layer-val="${i}">${g}%</span>
+      </div>
+    `;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="pitch-row">
+      <label>attack</label>
+      <input type="range" class="std" id="tmpl-attack-slider" min="1" max="500" step="1" value="${attack}">
+      <span class="pitch-val" id="tmpl-attack-val">${attack}ms</span>
+    </div>
+    <div class="pitch-row">
+      <label>release</label>
+      <input type="range" class="std" id="tmpl-release-slider" min="20" max="3000" step="10" value="${release}">
+      <span class="pitch-val" id="tmpl-release-val">${release}ms</span>
+    </div>
+    ${layerRows}
+  `;
+
+  host.querySelector('#tmpl-attack-slider').addEventListener('input', (e) => {
+    const v = parseInt(e.target.value);
+    env.attackMs = v;
+    host.querySelector('#tmpl-attack-val').textContent = v + 'ms';
+  });
+  host.querySelector('#tmpl-release-slider').addEventListener('input', (e) => {
+    const v = parseInt(e.target.value);
+    env.releaseMs = v;
+    host.querySelector('#tmpl-release-val').textContent = v + 'ms';
+  });
+  host.querySelectorAll('[data-layer-slider]').forEach((slider) => {
+    slider.addEventListener('input', (e) => {
+      const idx = parseInt(slider.dataset.layerSlider);
+      const v = parseInt(e.target.value);
+      if (patch.layers && patch.layers[idx]) {
+        patch.layers[idx].gain = v / 100;
+      }
+      const valEl = host.querySelector(`[data-layer-val="${idx}"]`);
+      if (valEl) valEl.textContent = v + '%';
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Re-render the inspector for the currently-selected seed. Cheap to
@@ -858,6 +949,16 @@ export function showLiveTemplate() {
 export function refreshInspector() {
   if (state.selectedSeedId) selectSeed(state.selectedSeedId);
 }
+
+window.addEventListener('pattern-bank-switch', (e) => {
+  if (!state.selectedSeedId) return;
+  if (e.detail && e.detail.seedId !== state.selectedSeedId) return;
+  const s = seedById(state.selectedSeedId);
+  if (!s || s.kind !== 'voice') return;
+  renderPatternEditor(s);
+  renderVelocityEditor(s);
+  updatePatternLoopInfo(s);
+});
 document.getElementById('pitch-slider').addEventListener('input', (e) => {
   const s = seedById(state.selectedSeedId);
   if (!s) return;
@@ -939,6 +1040,42 @@ document.getElementById('loop-toggle').addEventListener('click', () => {
   // turned it OFF, leave patternIdx alone — current loop completes.
   if (s.loop) s.patternIdx = 0;
   takeSnapshotFn(s.loop ? 'loop on' : 'loop off');
+});
+
+document.getElementById('variation-add-btn').addEventListener('click', () => {
+  const s = seedById(state.selectedSeedId);
+  if (!s || s.kind !== 'voice') return;
+  // Deep-clone the current pattern so editing the new variation
+  // doesn't ripple back into the source.
+  const cloned = s.pattern.map(step => ({
+    ...step,
+    extras: step.extras ? step.extras.map(e => ({ ...e })) : undefined,
+  }));
+  if (!s.patternBank) s.patternBank = [{ id: 'orig', steps: s.pattern, weight: 1 }];
+  s.patternBank.push({
+    id: Math.random().toString(36).slice(2, 8),
+    steps: cloned,
+    weight: 1,
+  });
+  s.patternBankIdx = s.patternBank.length - 1;
+  s.pattern = cloned;
+  updateVariationInfo(s);
+  takeSnapshotFn('added variation');
+});
+
+document.getElementById('variation-remove-btn').addEventListener('click', () => {
+  const s = seedById(state.selectedSeedId);
+  if (!s || s.kind !== 'voice') return;
+  if (!s.patternBank || s.patternBank.length < 2) return;
+  s.patternBank.splice(s.patternBankIdx, 1);
+  // Drop to the first remaining variant; this also keeps the user
+  // viewing something rather than a dangling-index orphan.
+  s.patternBankIdx = 0;
+  s.pattern = s.patternBank[0].steps;
+  renderPatternEditor(s);
+  renderVelocityEditor(s);
+  updatePatternLoopInfo(s);
+  takeSnapshotFn('removed variation');
 });
 
 document.getElementById('regen-btn').addEventListener('click', async () => {

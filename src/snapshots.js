@@ -39,6 +39,20 @@ export function takeSnapshot(label, immediate = false) {
           tOffset: p.tOffset,
           extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
         })),
+        // Pattern bank (#53) — variations the seed cycles through at
+        // each loop. Each entry stores its own deep-cloned steps so
+        // edits to one variant don't leak into others.
+        patternBank: s.patternBank ? s.patternBank.map(b => ({
+          id: b.id,
+          weight: b.weight,
+          steps: b.steps.map(p => ({
+            offset: p.offset, velocity: p.velocity,
+            duration: p.duration, tOffset: p.tOffset,
+            extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
+            drumSlot: p.drumSlot,
+          })),
+        })) : undefined,
+        patternBankIdx: s.patternBankIdx || 0,
         quantize: s.quantize,
         loop: s.loop,
         wanderlust: s.wanderlust,
@@ -51,6 +65,11 @@ export function takeSnapshot(label, immediate = false) {
         falloffCurve:    s.falloffCurve,
         driveAmount: s.driveAmount,
         gainAmount: s.gainAmount,
+        squashAmount: s.squashAmount,
+        wobbleRate: s.wobbleRate,
+        wobbleDepth: s.wobbleDepth,
+        crushBits: s.crushBits,
+        crushRate: s.crushRate,
         reverbSec: s.reverbSec,
         role: s.role,
         swing: s.swing,
@@ -104,6 +123,26 @@ export function revertToSnapshot(i) {
       patternIdx: 0, currentStep: -1, nextTrigger: 0, lastPulseAt: 0,
       delayInput: null, delayNode: null,
     };
+    // Rebuild patternBank if the snapshot has one; otherwise wrap the
+    // freshly-cloned pattern as a single-entry bank so future variant
+    // adds work without a separate init pass.
+    if (s.patternBank && s.patternBank.length > 0) {
+      newSeed.patternBank = s.patternBank.map(b => ({
+        id: b.id || Math.random().toString(36).slice(2, 8),
+        weight: b.weight != null ? b.weight : 1,
+        steps: b.steps.map(p => ({
+          offset: p.offset, velocity: p.velocity,
+          duration: p.duration, tOffset: p.tOffset,
+          extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
+          drumSlot: p.drumSlot,
+        })),
+      }));
+      newSeed.patternBankIdx = Math.min(s.patternBankIdx || 0, newSeed.patternBank.length - 1);
+      newSeed.pattern = newSeed.patternBank[newSeed.patternBankIdx].steps;
+    } else if (newSeed.kind === 'voice') {
+      newSeed.patternBank = [{ id: 'orig', weight: 1, steps: newSeed.pattern }];
+      newSeed.patternBankIdx = 0;
+    }
     seeds.push(newSeed);
     setupModifierChain(newSeed);
   }

@@ -122,6 +122,9 @@ export const MUTE_COLOR  = '#7a7f8e';
 export const SQUASH_COLOR = '#7ad6ff';
 export const WOBBLE_COLOR = '#c478ff';
 export const CRUSH_COLOR  = '#ff5577';
+// Shift aura: raises the per-loop probability that a seed in its
+// field switches to a different pattern variation (#53).
+export const SHIFT_COLOR  = '#ffac4d';
 
 // === Small generic helpers ===
 export function makeHarmonicsArr() { return new Array(12).fill(0); }

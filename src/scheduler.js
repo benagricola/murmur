@@ -56,12 +56,60 @@ export function playNoteAt(seed, when, freq, gain, sustainMs, patchOverride) {
   seed.lastPulseAt = when;
 }
 
+// Weighted-roll a new patternBank entry for the seed if the dice
+// fall the right way. Switch probability = base 5% + sum of shift-aura
+// intensities at the seed's position, clamped to 1.0. When switching
+// we exclude the current variant from the weighted pool so we never
+// "switch to the same thing" — sterile if the bank only has 2
+// variants and the dice would otherwise stick.
+const PATTERN_SWITCH_BASE_PROB = 0.05;
+function maybeRollPatternBank(seed) {
+  const bank = seed.patternBank;
+  if (!bank || bank.length < 2) return;
+  let shiftBoost = 0;
+  for (const m of seeds) {
+    if (m.kind !== 'modifier' || m.modifierKind !== 'shift') continue;
+    shiftBoost += auraIntensityForSeed(m, seed);
+  }
+  const prob = Math.min(1, PATTERN_SWITCH_BASE_PROB + shiftBoost);
+  if (Math.random() >= prob) return;
+  // Weighted pick from all entries except the current one.
+  let total = 0;
+  for (let i = 0; i < bank.length; i++) {
+    if (i === seed.patternBankIdx) continue;
+    total += (bank[i].weight != null ? bank[i].weight : 1);
+  }
+  if (total <= 0) return;
+  let r = Math.random() * total;
+  let pickIdx = -1;
+  for (let i = 0; i < bank.length; i++) {
+    if (i === seed.patternBankIdx) continue;
+    r -= (bank[i].weight != null ? bank[i].weight : 1);
+    if (r <= 0) { pickIdx = i; break; }
+  }
+  if (pickIdx < 0) return;
+  seed.patternBankIdx = pickIdx;
+  seed.pattern = bank[pickIdx].steps;
+  // Inspector listens so the pattern editor + variation badge refresh
+  // when a switch happens while the seed is being viewed.
+  window.dispatchEvent(new CustomEvent('pattern-bank-switch', { detail: { seedId: seed.id } }));
+}
+
 export function playSeedStep(seed, when) {
   if (!seed.pattern || seed.pattern.length === 0) {
     playNoteAt(seed, when, seed.fundamental, seed.gain || 0.35);
     return;
   }
   const stepIdx = seed.patternIdx % seed.pattern.length;
+  // Pattern-bank roll fires at the LOOP BOUNDARY (step 0, after the
+  // first loop). Higher chance under a shift aura — at full intensity
+  // the seed switches every loop; with no aura the bank's base
+  // tendency is gentle (~5%) so multi-variant seeds get the occasional
+  // organic change without constant churn.
+  if (stepIdx === 0 && seed.patternIdx > 0
+      && seed.patternBank && seed.patternBank.length > 1) {
+    maybeRollPatternBank(seed);
+  }
   const step = seed.pattern[stepIdx];
   // Monotonic increment (no modulo here). Pattern lookup wraps via
   // modulo on read. Keeping patternIdx monotonic is what lets the

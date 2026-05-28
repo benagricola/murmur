@@ -90,6 +90,7 @@ function plantModifierAt(c) {
               : modKind === 'wobble' ? 30
               : modKind === 'squash' ? 34
               : modKind === 'crush' ? 28
+              : modKind === 'shift' ? 30
               : 32;
   // Tiny harmonic shape per modifier kind so the blob silhouette hints
   // at character even before any voices are captured.
@@ -103,6 +104,7 @@ function plantModifierAt(c) {
   else if (modKind === 'squash') { harmonics[0] = 0.12; harmonics[1] = 0.04; }  // squat, dense
   else if (modKind === 'wobble') { harmonics[1] = 0.09; harmonics[2] = 0.06; harmonics[3] = 0.04; }  // undulating
   else if (modKind === 'crush')  { harmonics[4] = 0.08; harmonics[8] = 0.06; }  // jagged step
+  else if (modKind === 'shift')  { harmonics[2] = 0.07; harmonics[3] = 0.05; harmonics[5] = 0.04; }  // stirring
   else                            { harmonics[1] = 0.03; harmonics[3] = 0.02; }
   const seed = makeSeed({
     kind: 'modifier', modifierKind: modKind,

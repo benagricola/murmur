@@ -13,7 +13,7 @@
 import {
   WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR,
   DRIVE_COLOR, GAIN_COLOR, MUTE_COLOR,
-  SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR,
+  SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR, SHIFT_COLOR,
   SEED_COLORS,
 } from './constants.js';
 import { BEAT_MS, BAR_MS } from './tempo.js';
@@ -174,6 +174,13 @@ export function makeSeed(opts) {
     patternIdx: 0,
     currentStep: -1,
     nextTrigger: 0,
+    // patternBank — additional pattern variations. seed.pattern always
+    // points at patternBank[patternBankIdx].steps so editing the live
+    // pattern mutates the bank in place. At each loop boundary the
+    // scheduler may pick a different bank entry (see #53). Bank starts
+    // with the initial pattern as the sole entry, weight 1.
+    patternBank: null,
+    patternBankIdx: 0,
     lastPulseAt: 0,
     quantize: opts.quantize !== undefined ? opts.quantize : true,
     // loop: when true (default), the pattern repeats indefinitely
@@ -236,6 +243,18 @@ export function makeSeed(opts) {
     muted: opts.muted || false,
     patch: opts.patch || null,
   };
+  // Initialise the patternBank with the seed's starting pattern as
+  // the sole entry. Editing seed.pattern in place keeps the bank in
+  // sync because seed.pattern and patternBank[0].steps share the same
+  // array reference. New variations append to the bank.
+  if (seed.kind === 'voice') {
+    seed.patternBank = [{
+      id: Math.random().toString(36).slice(2, 8),
+      steps: seed.pattern,
+      weight: 1,
+    }];
+    seed.patternBankIdx = 0;
+  }
   if (!seed.color) {
     if (seed.kind === 'modifier') {
       if      (seed.modifierKind === 'weave')  seed.color = WEAVE_COLOR;
@@ -248,6 +267,7 @@ export function makeSeed(opts) {
       else if (seed.modifierKind === 'squash') seed.color = SQUASH_COLOR;
       else if (seed.modifierKind === 'wobble') seed.color = WOBBLE_COLOR;
       else if (seed.modifierKind === 'crush')  seed.color = CRUSH_COLOR;
+      else if (seed.modifierKind === 'shift')  seed.color = SHIFT_COLOR;
     } else {
       seed.color = (seed.role && TIMBRE_ROLES[seed.role])
         ? TIMBRE_ROLES[seed.role].color

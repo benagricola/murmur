@@ -25,6 +25,7 @@ export const KIND_LABELS = {
   squash:   'squash',   // compressor — punch + pump
   wobble:   'wobble',   // LFO modulation — movement
   crush:    'crush',    // bitcrusher — lo-fi grit
+  shift:    'shift',    // pattern variation roller
   // Bloom kinds (radial one-shots — internal `pulse` category)
   drop:     'drop',
   muffle:   'muffle',
