@@ -537,7 +537,35 @@ function updateLatencyReadout(totalMs, audioMs) {
   el.textContent = totalMs.toFixed(0) + 'ms';
   el.classList.toggle('warn', totalMs >= 30 && totalMs < 60);
   el.classList.toggle('bad', totalMs >= 60);
-  el.title = `MIDI → audio: ${totalMs.toFixed(0)}ms (audio buffer ${audioMs.toFixed(0)}ms)`;
+  el.title = `MIDI → audio: ${totalMs.toFixed(0)}ms (audio buffer ${audioMs.toFixed(0)}ms — same buffer applies to pattern playback)`;
+}
+
+// Standing audio-buffer latency from the AudioContext. This is the
+// floor — the delay between scheduling a sound at currentTime and the
+// user hearing it. It applies to EVERY sound the app produces (live
+// keys, pattern playback, drum hits), not just MIDI keypresses, so
+// we display it constantly. Updates whenever audioCtx exists. The
+// number can be 0 in Firefox before audio actually starts (the spec
+// allows reporting 0 until a context is properly running).
+function refreshStandingLatency() {
+  const el = document.getElementById('latency-readout');
+  if (!el) return;
+  if (!audioCtx) { el.textContent = '— ms'; el.title = 'audio context not started — click anywhere to enable sound'; return; }
+  const audioMs = ((audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0)) * 1000;
+  if (audioMs <= 0) {
+    el.textContent = '— ms';
+    el.title = 'audio context running but buffer latency not yet reported (try playing a key)';
+    return;
+  }
+  el.textContent = audioMs.toFixed(0) + 'ms';
+  el.classList.toggle('warn', audioMs >= 30 && audioMs < 60);
+  el.classList.toggle('bad', audioMs >= 60);
+  el.title = `audio buffer + driver: ${audioMs.toFixed(0)}ms — base of every sound (pattern playback, live keys, drums)`;
+}
+// Poll once a second so we catch the buffer latency settling shortly
+// after audio starts. Cheap; outputLatency is a property read.
+if (typeof setInterval !== 'undefined') {
+  setInterval(refreshStandingLatency, 1000);
 }
 
 if (typeof window !== 'undefined') {

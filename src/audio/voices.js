@@ -515,14 +515,19 @@ function audioDebugEnabled() {
 //   - voices whose internal v.stop() failed silently
 //   - long release envelopes that overstay their welcome
 //
-// The grace period is generous (1.5 s past expected stop) so legit
-// release tails finish naturally. Anything still alive past that is
-// genuinely stuck and gets pulled.
+// The grace period (1.5 s past expected stop) lets legit release
+// tails finish naturally; after that we delete the entry. Most
+// entries get cleaned up this way — that's routine, not a problem.
+// We only LOG when an entry is MUCH later than expected (genuine
+// stuck-note territory) because the routine cleanup was producing
+// dozens of warnings per second on busy patterns and drowned out
+// real issues.
 //
 // Live mode entries use a 30s expected stop initially; release()
 // updates that to the actual ramp end time.
 const activeNotes = new Set();
 const SAFETY_GRACE_SEC = 1.5;
+const SAFETY_LOG_THRESHOLD_SEC = 8;   // only warn for genuinely stuck notes
 const SAFETY_SWEEP_MS = 200;
 const LIVE_NOTE_MAX_LIFETIME_SEC = 30;
 
@@ -557,17 +562,22 @@ if (typeof setInterval !== 'undefined') {
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
     for (const entry of activeNotes) {
-      if (now > entry.expectedStopTime + SAFETY_GRACE_SEC) {
-        const overdue = (now - entry.expectedStopTime).toFixed(2);
-        console.warn(`[safety] force-stopping ${entry.source} note overdue by ${overdue}s`);
-        try {
-          if (entry.output) entry.output.disconnect();
-        } catch (e) {}
-        try {
-          if (entry.voices) for (const v of entry.voices) { try { v.stop(now); } catch (e) {} }
-        } catch (e) {}
-        activeNotes.delete(entry);
+      const overdue = now - entry.expectedStopTime;
+      if (overdue <= SAFETY_GRACE_SEC) continue;
+      // Only log if the note is REALLY stuck — past the warn threshold
+      // means release() likely never fired or a voice didn't stop.
+      // Routine cleanup of finished one-shots/scheduled notes happens
+      // silently below.
+      if (overdue >= SAFETY_LOG_THRESHOLD_SEC) {
+        console.warn(`[safety] force-stopping ${entry.source} note overdue by ${overdue.toFixed(2)}s`);
       }
+      try {
+        if (entry.output) entry.output.disconnect();
+      } catch (e) {}
+      try {
+        if (entry.voices) for (const v of entry.voices) { try { v.stop(now); } catch (e) {} }
+      } catch (e) {}
+      activeNotes.delete(entry);
     }
   }, SAFETY_SWEEP_MS);
 }
