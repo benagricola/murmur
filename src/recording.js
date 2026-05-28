@@ -45,16 +45,38 @@ function alignSeedToNextBar(seed) {
   seed.nextTrigger = state.playbackStartTime + nextBarStart;
 }
 
+// Render the record-button label based on the current selection.
+// With a voice seed selected the button reads "+ record variant" so
+// the user knows the next take WILL be added to that seed's bank
+// rather than planted as a new seed. Called from selectSeed +
+// closeInspector via the inspector module.
+export function refreshRecButtonLabel() {
+  const btn = document.getElementById('rec-btn');
+  if (!btn) return;
+  if (state.isRecording) { btn.textContent = '■ stop'; return; }
+  const sel = seedById(state.selectedSeedId);
+  if (sel && sel.kind === 'voice') {
+    btn.textContent = '● record variant';
+  } else {
+    btn.textContent = '● record';
+  }
+}
+
 export function startRecording() {
   if (state.isRecording) return;
   state.isRecording = true;
   state.recordingBuffer = null;
+  const sel = seedById(state.selectedSeedId);
+  const intoSeed = sel && sel.kind === 'voice';
   document.getElementById('rec-btn').classList.add('recording');
   document.getElementById('rec-btn').textContent = '■ stop';
   const ov = document.createElement('div');
   ov.className = 'recording-overlay';
   ov.id = 'rec-overlay';
-  ov.innerHTML = '<span class="rec-dot"></span><span>recording · play a phrase</span>';
+  const msg = intoSeed
+    ? `recording variant for "${sel.label || 'seed'}"`
+    : 'recording · play a phrase';
+  ov.innerHTML = `<span class="rec-dot"></span><span>${msg}</span>`;
   document.getElementById('canvas-wrap').appendChild(ov);
   refreshPadLights(); paintScreen();
 }
@@ -63,7 +85,7 @@ export function finishRecording() {
   if (!state.isRecording) return;
   state.isRecording = false;
   document.getElementById('rec-btn').classList.remove('recording');
-  document.getElementById('rec-btn').textContent = '● record';
+  refreshRecButtonLabel();
   const ov = document.getElementById('rec-overlay');
   if (ov) ov.remove();
   refreshPadLights(); paintScreen();
@@ -89,19 +111,26 @@ export function finishRecording() {
   if (!result) return;
   const sel = seedById(state.selectedSeedId);
   if (sel && sel.kind === 'voice') {
-    sel.pattern = result.pattern;
-    // Keep the bank in sync: the current variant's steps reference
-    // must always match seed.pattern, otherwise the next loop boundary
-    // would replay the OLD pre-rewrite steps.
-    if (sel.patternBank && sel.patternBank[sel.patternBankIdx]) {
-      sel.patternBank[sel.patternBankIdx].steps = result.pattern;
+    // With a voice seed selected, recording APPENDS a new variant to
+    // the bank instead of overwriting. The user can riff multiple
+    // takes into one seed and let the shift aura cycle between them;
+    // the only way to throw a take away is the inspector's remove
+    // button. intervalMs / fundamental belong to the seed, not the
+    // variant — keep the existing ones so a slow take doesn't reset
+    // the pattern grid for prior variants.
+    if (!sel.patternBank) {
+      sel.patternBank = [{ id: 'orig', steps: sel.pattern, weight: 1 }];
     }
-    sel.intervalMs = result.intervalMs;
-    sel.fundamental = result.fundamental;
-    sel.r = radiusForFundamental(sel.fundamental);
+    sel.patternBank.push({
+      id: Math.random().toString(36).slice(2, 8),
+      steps: result.pattern,
+      weight: 1,
+    });
+    sel.patternBankIdx = sel.patternBank.length - 1;
+    sel.pattern = result.pattern;
     syncRenderedSeeds();
     selectSeed(sel.id);
-    takeSnapshot('rewrote ' + sel.label);
+    takeSnapshot(`recorded variant ${sel.patternBank.length}`);
   } else {
     plantRecordedSeed(result);
   }

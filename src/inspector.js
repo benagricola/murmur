@@ -23,6 +23,7 @@ import {
 } from './seeds.js';
 import { setStepHighlightHandler, playNoteAt } from './scheduler.js';
 import { refreshSelectionLights, paintScreen } from './output/minilab3.js';
+import { refreshRecButtonLabel } from './recording.js';
 import { ensureAudio } from './audio/context.js';
 import { labelFor, categoryLabel } from './labels.js';
 
@@ -73,6 +74,7 @@ export function selectSeed(id) {
   state.selectedSeedId = id;
   const tmplEdit = document.getElementById('template-edit');
   if (tmplEdit) tmplEdit.style.display = 'none';
+  refreshRecButtonLabel();
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
   // Sub-line: "aura · ripple" or "seed · melody · amber willow".
@@ -548,6 +550,62 @@ function updateVariationInfo(seed) {
   const idx = (seed.patternBankIdx || 0) + 1;
   info.textContent = `var ${idx}/${bank.length}`;
   if (removeBtn) removeBtn.style.display = bank.length > 1 ? '' : 'none';
+
+  // Splitter — only useful when the current variant has enough steps
+  // to divide. We offer 2/4/8-way splits whenever the step count is
+  // divisible. With a 4-step pattern we only show "split 2"; with a
+  // 32-step recording we show all three.
+  const splitRow = document.getElementById('variation-split-row');
+  const splitPicker = document.getElementById('variation-split-picker');
+  if (splitRow && splitPicker) {
+    const len = seed.pattern.length;
+    const opts = [2, 4, 8]
+      .filter(n => len >= n * 2 && len % n === 0)
+      .map(n => ({ label: 'into ' + n, n }));
+    if (opts.length === 0) {
+      splitRow.style.display = 'none';
+    } else {
+      splitRow.style.display = '';
+      buildPicker(splitPicker, opts, (opt) => splitCurrentVariant(seed, opt.n), () => -1);
+    }
+  }
+}
+
+// Slice the current variant's pattern into `n` equal contiguous
+// chunks; each chunk becomes its own variant. The original chunk
+// position is replaced by the FIRST chunk so seed.patternBankIdx
+// still points at the start of the original pattern (the user keeps
+// the front of the loop they recorded). Snapshots before so the
+// pre-split phrase is recoverable.
+function splitCurrentVariant(seed, n) {
+  if (!seed || !seed.patternBank) return;
+  const cur = seed.patternBank[seed.patternBankIdx];
+  if (!cur || !cur.steps || cur.steps.length < n * 2 || cur.steps.length % n !== 0) return;
+  takeSnapshotFn(`before split into ${n}`);
+  const len = cur.steps.length;
+  const each = len / n;
+  const chunks = [];
+  for (let i = 0; i < n; i++) {
+    const slice = cur.steps.slice(i * each, (i + 1) * each).map(step => ({
+      ...step,
+      extras: step.extras ? step.extras.map(e => ({ ...e })) : undefined,
+    }));
+    chunks.push({
+      id: Math.random().toString(36).slice(2, 8),
+      steps: slice,
+      weight: 1,
+    });
+  }
+  // Replace the source variant with the first chunk; append the rest.
+  seed.patternBank.splice(seed.patternBankIdx, 1, ...chunks);
+  seed.pattern = seed.patternBank[seed.patternBankIdx].steps;
+  // syncRenderedSeeds reshapes the blob if the pattern length affects
+  // it, and re-rendering the pattern editor shows the shortened loop.
+  syncRenderedSeeds();
+  renderPatternEditor(seed);
+  renderVelocityEditor(seed);
+  updatePatternLoopInfo(seed);
+  takeSnapshotFn(`split into ${n} variants`);
 }
 
 function renderPatternEditor(seed) {
@@ -822,6 +880,7 @@ export function closeInspector() {
   syncRenderedSeeds();
   refreshSelectionLights();
   paintScreen();
+  refreshRecButtonLabel();
   showLiveTemplate();
 }
 
