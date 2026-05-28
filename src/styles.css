@@ -98,6 +98,9 @@
 
 .plant-opt[data-kind="cloud"] .dot { background: #d0d8e8; }
 .plant-opt[data-kind="poly"] .dot { background: #9be9a8; }
+.plant-opt[data-kind="drive"] .dot { background: #ff7a4d; }
+.plant-opt[data-kind="gain"] .dot { background: #ffe066; }
+.plant-opt[data-kind="mute"] .dot { background: #7a7f8e; }
 
 /* Event-trigger plant opts are visually distinct from persistent ones —
    a hollow burst icon rather than a filled dot to signal "one-shot event". */

@@ -68,10 +68,12 @@ export function routeFinalOutput(seed, node) {
     if (filterBomb) {
       node.connect(filterBomb.filterNode);
     } else {
-      // Per-seed postGain node lets us briefly duck a seed on
-      // collision impact (set up here lazily on first route).
-      // Connects directly to the right destination once; subsequent
-      // notes from the seed go through the same postGain.
+      // Two persistent per-seed gain nodes:
+      //   seed.auraGain  — modulated by gain/mute proximity each tick
+      //                    (scheduler.updateAuraModulation). Resting
+      //                    value 1.0 when no aura affects the seed.
+      //   seed.postGain  — collision duck handles this. Resting 1.0.
+      // Chain: node → auraGain → postGain → dest. Both lazily-created.
       const cat = seed.patch && seed.patch.category;
       const isDrum = cat === 'drum' || cat === 'drum-kit';
       const dest = isDrum && drumBus ? drumBus : masterGain;
@@ -80,7 +82,12 @@ export function routeFinalOutput(seed, node) {
         seed.postGain.gain.value = 1.0;
         seed.postGain.connect(dest);
       }
-      node.connect(seed.postGain || dest);
+      if (!seed.auraGain && audioCtx) {
+        seed.auraGain = audioCtx.createGain();
+        seed.auraGain.gain.value = 1.0;
+        seed.auraGain.connect(seed.postGain || dest);
+      }
+      node.connect(seed.auraGain || seed.postGain || dest);
     }
     // Proximity-graded ripple / cloud sends. For every aura on the
     // canvas, compute its intensity at this seed's position and route
@@ -104,6 +111,11 @@ export function routeFinalOutput(seed, node) {
         g.gain.value = intensity;
         node.connect(g);
         g.connect(m.reverbInput);
+      } else if (m.modifierKind === 'drive' && m.driveInput && audioCtx) {
+        const g = audioCtx.createGain();
+        g.gain.value = intensity;
+        node.connect(g);
+        g.connect(m.driveInput);
       }
     }
   }

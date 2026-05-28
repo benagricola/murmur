@@ -108,6 +108,13 @@ export const WEAVE_COLOR  = '#ffa94d';
 export const RIPPLE_COLOR = '#e8a8c8';
 export const CLOUD_COLOR  = '#d0d8e8';
 export const POLY_COLOR   = '#9be9a8';
+// Phase 3 — louder/dirtier territory.
+//   drive : saturation / soft clip
+//   gain  : volume boost (multiplier > 1)
+//   mute  : volume reduce (multiplier < 1)
+export const DRIVE_COLOR = '#ff7a4d';
+export const GAIN_COLOR  = '#ffe066';
+export const MUTE_COLOR  = '#7a7f8e';
 
 // === Small generic helpers ===
 export function makeHarmonicsArr() { return new Array(12).fill(0); }

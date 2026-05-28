@@ -379,9 +379,40 @@ function physicsStep(silent) {
   if (anyMoved && !silent) renderTethers();
 }
 
+// Each frame, walk every voice seed and compute its net gain
+// multiplier from any gain/mute auras in range. Ramp seed.auraGain
+// toward that value via setTargetAtTime so the change is smooth
+// even when the seed drifts in/out of the aura field. Default
+// multiplier is 1.0 (no aura affecting).
+function updateAuraModulation() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  for (const seed of seeds) {
+    if (seed.kind !== 'voice' || !seed.auraGain) continue;
+    let mult = 1.0;
+    for (const m of seeds) {
+      if (m.kind !== 'modifier') continue;
+      if (m.modifierKind !== 'gain' && m.modifierKind !== 'mute') continue;
+      const intensity = auraIntensityForSeed(m, seed);
+      if (intensity < 0.001) continue;
+      // gain: amount > 1 (boost), default 1.6
+      // mute: amount < 1 (reduce), default 0.0 (fully silent at centre)
+      const amount = m.gainAmount != null ? m.gainAmount
+        : (m.modifierKind === 'gain' ? 1.6 : 0.0);
+      mult *= 1 + (amount - 1) * intensity;
+    }
+    // Clamp to a sensible band so a stack of gain auras doesn't blow
+    // up to absurd levels.
+    if (mult < 0)   mult = 0;
+    if (mult > 4.0) mult = 4.0;
+    try { seed.auraGain.gain.setTargetAtTime(mult, now, 0.04); } catch (e) {}
+  }
+}
+
 function visualTick() {
   const now = audioCtx ? audioCtx.currentTime : 0;
   physicsStep();
+  updateAuraModulation();
   for (const seed of seeds) {
     const node = seedNodes.get(seed.id);
     if (!node) continue;

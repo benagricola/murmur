@@ -19,6 +19,9 @@ export const KIND_LABELS = {
   ripple:   'ripple',
   cloud:    'cloud',
   poly:     'vine',     // poly = polyrhythm (internal); vine = the look
+  drive:    'drive',    // soft-clip distortion territory
+  gain:     'boost',    // volume amplification territory
+  mute:     'hush',     // volume reduction territory
   // Bloom kinds (radial one-shots — internal `pulse` category)
   drop:     'drop',
   muffle:   'muffle',

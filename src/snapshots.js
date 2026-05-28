@@ -49,6 +49,8 @@ export function takeSnapshot(label, immediate = false) {
         edgeIntensity:   s.edgeIntensity,
         centerIntensity: s.centerIntensity,
         falloffCurve:    s.falloffCurve,
+        driveAmount: s.driveAmount,
+        gainAmount: s.gainAmount,
         reverbSec: s.reverbSec,
         role: s.role,
         swing: s.swing,

@@ -127,9 +127,12 @@ function plantModifierAt(c) {
   // Tiny harmonic shape per modifier kind so the blob silhouette hints
   // at character even before any voices are captured.
   const harmonics = new Array(12).fill(0);
-  if (modKind === 'weave')       { harmonics[2] = 0.06; harmonics[5] = 0.04; }
+  if      (modKind === 'weave')  { harmonics[2] = 0.06; harmonics[5] = 0.04; }
   else if (modKind === 'ripple') { harmonics[2] = 0.05; harmonics[5] = 0.03; }
   else if (modKind === 'poly')   { harmonics[1] = 0.06; harmonics[4] = 0.04; harmonics[7] = 0.03; }
+  else if (modKind === 'drive')  { harmonics[0] = 0.10; harmonics[2] = 0.07; harmonics[6] = 0.05; }
+  else if (modKind === 'gain')   { harmonics[0] = 0.08; harmonics[1] = 0.06; }
+  else if (modKind === 'mute')   { harmonics[3] = 0.04; harmonics[5] = 0.03; }
   else                            { harmonics[1] = 0.03; harmonics[3] = 0.02; }
   const seed = makeSeed({
     kind: 'modifier', modifierKind: modKind,
@@ -140,6 +143,9 @@ function plantModifierAt(c) {
     delayMs: BAR_MS * 3/16,
     reverbSec: 2.0,
     polyFactor: 2/3,
+    // Phase 3 aura-kind specific defaults. Adjustable via inspector.
+    driveAmount: 1.6,
+    gainAmount: modKind === 'gain' ? 1.6 : (modKind === 'mute' ? 0.0 : 1.0),
     harmonics,
     label: modKind,
   });

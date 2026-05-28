@@ -48,10 +48,42 @@ export function setupCloudChain(cloudSeed) {
   cloudSeed.convolver = convolver;
 }
 
+// Drive = saturation / soft-clip aura. One per-aura WaveShaper that
+// captured voices send through. Send gain is set per-pair at note
+// time from proximity intensity. Dry signal continues straight to
+// master so the drive is *additive*, not destructive — close to the
+// aura sounds warm, deep inside sounds proper-dirty.
+function makeDriveCurve(amount) {
+  const N = 2048;
+  const arr = new Float32Array(N);
+  const k = 1 + amount * 4;   // amount 0..2 → k 1..9
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    arr[i] = Math.tanh(x * k);
+  }
+  return arr;
+}
+export function setupDriveChain(driveSeed) {
+  if (driveSeed.driveInput) return;
+  const input = audioCtx.createGain();
+  const shaper = audioCtx.createWaveShaper();
+  shaper.curve = makeDriveCurve(driveSeed.driveAmount != null ? driveSeed.driveAmount : 1.6);
+  shaper.oversample = '2x';
+  const wet = audioCtx.createGain();
+  wet.gain.value = 0.55;
+  input.connect(shaper); shaper.connect(wet); wet.connect(masterGain);
+  driveSeed.driveInput = input;
+  driveSeed.driveShaper = shaper;
+}
+
 export function setupModifierChain(seed) {
   if (seed.kind !== 'modifier' || !audioCtx) return;
   if (seed.modifierKind === 'ripple') setupRippleChain(seed);
   if (seed.modifierKind === 'cloud') setupCloudChain(seed);
+  if (seed.modifierKind === 'drive') setupDriveChain(seed);
+  // gain / mute don't need their own chain — they modulate
+  // seed.auraGain on every captured voice each tick (see scheduler
+  // updateAuraModulation).
 }
 
 // Attach chains for any modifier seeds planted before audio existed.

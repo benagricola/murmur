@@ -11,7 +11,9 @@
 // these DOM refs.
 
 import {
-  WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR, SEED_COLORS,
+  WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR,
+  DRIVE_COLOR, GAIN_COLOR, MUTE_COLOR,
+  SEED_COLORS,
 } from './constants.js';
 import { BEAT_MS, BAR_MS } from './tempo.js';
 import { TIMBRE_ROLES } from './timbres.js';
@@ -198,6 +200,9 @@ export function makeSeed(opts) {
     edgeIntensity:   opts.edgeIntensity   !== undefined ? opts.edgeIntensity   : 0,
     centerIntensity: opts.centerIntensity !== undefined ? opts.centerIntensity : 1,
     falloffCurve:    opts.falloffCurve || 'linear',
+    // Drive / gain / mute aura kind-specific settings.
+    driveAmount: opts.driveAmount !== undefined ? opts.driveAmount : 1.6,
+    gainAmount:  opts.gainAmount  !== undefined ? opts.gainAmount  : 1.0,
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
     attackFrac: attackMs / BAR_MS,
@@ -225,10 +230,13 @@ export function makeSeed(opts) {
   };
   if (!seed.color) {
     if (seed.kind === 'modifier') {
-      if (seed.modifierKind === 'weave') seed.color = WEAVE_COLOR;
+      if      (seed.modifierKind === 'weave')  seed.color = WEAVE_COLOR;
       else if (seed.modifierKind === 'ripple') seed.color = RIPPLE_COLOR;
-      else if (seed.modifierKind === 'cloud') seed.color = CLOUD_COLOR;
-      else if (seed.modifierKind === 'poly') seed.color = POLY_COLOR;
+      else if (seed.modifierKind === 'cloud')  seed.color = CLOUD_COLOR;
+      else if (seed.modifierKind === 'poly')   seed.color = POLY_COLOR;
+      else if (seed.modifierKind === 'drive')  seed.color = DRIVE_COLOR;
+      else if (seed.modifierKind === 'gain')   seed.color = GAIN_COLOR;
+      else if (seed.modifierKind === 'mute')   seed.color = MUTE_COLOR;
     } else {
       seed.color = (seed.role && TIMBRE_ROLES[seed.role])
         ? TIMBRE_ROLES[seed.role].color
@@ -247,8 +255,10 @@ export function removeSeed(id) {
   // this, scheduled notes already in the Web Audio queue would play
   // out their full envelope after the seed is gone.
   forceStopByTag(id);
-  // Disconnect the seed's persistent postGain so nothing leaks.
-  if (seed.postGain) { try { seed.postGain.disconnect(); } catch (e) {} seed.postGain = null; }
+  // Disconnect the seed's persistent audio nodes so nothing leaks.
+  if (seed.postGain)    { try { seed.postGain.disconnect(); }    catch (e) {} seed.postGain = null; }
+  if (seed.auraGain)    { try { seed.auraGain.disconnect(); }    catch (e) {} seed.auraGain = null; }
+  if (seed.driveInput)  { try { seed.driveInput.disconnect(); }  catch (e) {} seed.driveInput = null; }
   // Disconnect modifier audio chains owned by this seed (delay/reverb
   // inputs) so their tails go silent rather than ringing into masterGain.
   if (seed.kind === 'modifier') {
