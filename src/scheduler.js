@@ -299,6 +299,20 @@ function physicsStep(silent) {
     let fx = 0, fy = 0;
     let maxImpactForce = 0;
     let impactPartner = null;
+    // Wanderlust drift — a smooth random walk force scaled by the
+    // seed's wanderlust setting. Direction changes every 0.5-2.0s
+    // depending on how restless the seed is, so motion looks
+    // organic rather than jittery.
+    if (a.wanderlust > 0) {
+      if (a._wanderUntil == null || tnow > a._wanderUntil) {
+        a._wanderTheta = Math.random() * Math.PI * 2;
+        const changeMs = 500 + (1 - a.wanderlust) * 1500;
+        a._wanderUntil = tnow + changeMs;
+      }
+      const wf = 0.12 * a.wanderlust;
+      fx += Math.cos(a._wanderTheta) * wf;
+      fy += Math.sin(a._wanderTheta) * wf;
+    }
     for (const b of seeds) {
       if (b === a) continue;
       const dx = a.cx - b.cx;

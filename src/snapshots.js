@@ -41,6 +41,7 @@ export function takeSnapshot(label, immediate = false) {
         })),
         quantize: s.quantize,
         loop: s.loop,
+        wanderlust: s.wanderlust,
         blobPhases: s.blobPhases ? s.blobPhases.slice() : undefined,
         capturedByIds: [...(s.capturedByIds || [])],
         capturedSeedIds: [...s.capturedSeedIds],

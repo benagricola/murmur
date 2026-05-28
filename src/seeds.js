@@ -91,6 +91,20 @@ export function auraIntensityForSeed(aura, seed) {
   return auraIntensityAt(aura, seed.cx, seed.cy);
 }
 
+// Default wanderlust per role — drums anchored, melody/voice drift.
+// Per-seed override via inspector slider; saved by snapshots.
+export function defaultWanderlust(kind, role) {
+  if (kind === 'modifier') return 0;
+  switch (role) {
+    case 'kick': case 'snare': case 'hat':
+    case 'drumkit': return 0;
+    case 'bass':    return 0.1;
+    case 'melody':  return 0.2;
+    case 'voice':   return 0.3;
+    default:        return 0.15;
+  }
+}
+
 // Seed mass for the soft-repulsion physics in scheduler.visualTick.
 // Heavier seeds barely move when bumped; lighter ones scatter. Mass
 // scales as log2(220 / fundamental) + 1 — 30 Hz → ~3.9, 220 → 1.0,
@@ -199,6 +213,13 @@ export function makeSeed(opts) {
     // representative slot freq via their patch.
     vx: 0, vy: 0,
     mass: computeSeedMass(opts.fundamental, opts.kind, opts.modifierKind),
+    // Wanderlust 0..1 — how restless the seed is. Adds a smoothly-
+    // changing random drift force in physicsStep. 0 = stays where
+    // placed; 1 = chaotically wanders. Default per role: drums sit
+    // still, bass barely moves, voice drifts gently. Auras have
+    // wanderlust 0 — they're territory, not organisms.
+    wanderlust: opts.wanderlust !== undefined ? opts.wanderlust
+      : defaultWanderlust(opts.kind, opts.role),
     muted: opts.muted || false,
     patch: opts.patch || null,
   };

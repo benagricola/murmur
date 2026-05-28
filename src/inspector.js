@@ -237,15 +237,23 @@ export function selectSeed(id) {
     lengthRow.style.display = 'none';
   }
   const volRow = document.getElementById('volume-row');
+  const wanderRow = document.getElementById('wanderlust-row');
   if (seed.kind === 'voice') {
     volRow.style.display = '';
+    wanderRow.style.display = '';
     const slider = document.getElementById('seed-vol-slider');
     const val = document.getElementById('seed-vol-val');
     const pct = Math.round((seed.gain || 0.35) * 100);
     slider.value = pct;
     val.textContent = pct + '%';
+    const wSlider = document.getElementById('wanderlust-slider');
+    const wVal = document.getElementById('wanderlust-val');
+    const wPct = Math.round((seed.wanderlust || 0) * 100);
+    wSlider.value = wPct;
+    wVal.textContent = wPct + '%';
   } else {
     volRow.style.display = 'none';
+    wanderRow.style.display = 'none';
   }
   const qRow = document.getElementById('quantize-row');
   if (seed.kind === 'voice') {
@@ -658,6 +666,17 @@ document.getElementById('seed-vol-slider').addEventListener('input', (e) => {
   document.getElementById('seed-vol-val').textContent = pct + '%';
 });
 document.getElementById('seed-vol-slider').addEventListener('change', () => takeSnapshotFn('tweaked volume'));
+
+// Wanderlust slider — how restless the seed is. 0 = anchored, 1 =
+// frenetic random drift. Updates live; physicsStep reads each tick.
+document.getElementById('wanderlust-slider').addEventListener('input', (e) => {
+  const s = seedById(state.selectedSeedId);
+  if (!s) return;
+  const pct = parseInt(e.target.value);
+  s.wanderlust = pct / 100;
+  document.getElementById('wanderlust-val').textContent = pct + '%';
+});
+document.getElementById('wanderlust-slider').addEventListener('change', () => takeSnapshotFn('tweaked wander'));
 
 // Aura intensity sliders — edge + centre value, 0..100% mapped to
 // the seed's edgeIntensity / centerIntensity (0..1). The aura's
