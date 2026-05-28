@@ -195,13 +195,94 @@ export function selectSeed(id) {
         return best;
       }
     );
-  } else {
-    // This picker sets how long each pattern STEP plays for — it
-    // stretches or compresses the whole pattern, it doesn't change
-    // the rhythmic shape (that's stored in the pattern itself, hit
-    // vs rest per step). Labelled "step length" to match what it
-    // actually does. Recorded loops default to 1/16 (the recording
-    // grid); changing it scales them faster or slower.
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'drive') {
+    document.querySelector('#rhythm-row label').textContent = 'drive';
+    const DRIVE_OPTIONS = [
+      { label: 'subtle', val: 0.5 },
+      { label: 'warm',   val: 1.0 },
+      { label: 'medium', val: 1.6 },
+      { label: 'strong', val: 2.2 },
+      { label: 'crush',  val: 3.0 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      DRIVE_OPTIONS,
+      (opt) => {
+        seed.driveAmount = opt.val;
+        // Rebuild the waveshaper curve with the new amount.
+        if (seed.driveShaper && audioCtx) {
+          const N = 2048;
+          const arr = new Float32Array(N);
+          const k = 1 + opt.val * 4;
+          for (let i = 0; i < N; i++) {
+            const x = (i / (N - 1)) * 2 - 1;
+            arr[i] = Math.tanh(x * k);
+          }
+          seed.driveShaper.curve = arr;
+        }
+        takeSnapshotFn('drive: ' + opt.label);
+      },
+      () => {
+        const v = seed.driveAmount != null ? seed.driveAmount : 1.6;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < DRIVE_OPTIONS.length; i++) {
+          const d = Math.abs(DRIVE_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'gain') {
+    document.querySelector('#rhythm-row label').textContent = 'boost';
+    const GAIN_OPTIONS = [
+      { label: '1.2×', val: 1.2 },
+      { label: '1.5×', val: 1.5 },
+      { label: '2×',   val: 2.0 },
+      { label: '2.5×', val: 2.5 },
+      { label: '3×',   val: 3.0 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      GAIN_OPTIONS,
+      (opt) => { seed.gainAmount = opt.val; takeSnapshotFn('boost: ' + opt.label); },
+      () => {
+        const v = seed.gainAmount != null ? seed.gainAmount : 1.6;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < GAIN_OPTIONS.length; i++) {
+          const d = Math.abs(GAIN_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'modifier' && seed.modifierKind === 'mute') {
+    document.querySelector('#rhythm-row label').textContent = 'hush';
+    const MUTE_OPTIONS = [
+      { label: '-3dB', val: 0.7 },
+      { label: '-6dB', val: 0.5 },
+      { label: '-12dB', val: 0.25 },
+      { label: '-24dB', val: 0.06 },
+      { label: 'silent', val: 0.0 },
+    ];
+    buildPicker(
+      document.getElementById('rhythm-picker'),
+      MUTE_OPTIONS,
+      (opt) => { seed.gainAmount = opt.val; takeSnapshotFn('hush: ' + opt.label); },
+      () => {
+        const v = seed.gainAmount != null ? seed.gainAmount : 0.0;
+        let best = 0, bestDiff = Infinity;
+        for (let i = 0; i < MUTE_OPTIONS.length; i++) {
+          const d = Math.abs(MUTE_OPTIONS[i].val - v);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        }
+        return best;
+      }
+    );
+  } else if (seed.kind === 'voice') {
+    // For tonal seeds: how long each pattern STEP plays. Stretches /
+    // compresses the whole pattern (not the rhythmic SHAPE — that's
+    // encoded in the pattern data itself). Hidden for modifiers
+    // because they don't have patterns.
     document.querySelector('#rhythm-row label').textContent = 'step length';
     buildPicker(
       document.getElementById('rhythm-picker'),
@@ -209,16 +290,14 @@ export function selectSeed(id) {
       (opt) => {
         seed.intervalMs = opt.ms;
         seed.intervalFrac = opt.frac;
-        // Force scheduler to re-anchor patternIdx at the new
-        // baseInterval. Without this, patternIdx (monotonic) would
-        // point to a fireTime far in the future at the new (often
-        // slower) interval and the seed would go silent.
         seed.nextTrigger = 0;
         updatePatternLoopInfo(seed);
         takeSnapshotFn('step length: ' + opt.label);
       },
       () => nearestOptionIdx(RHYTHM_OPTIONS, seed.intervalMs)
     );
+  } else {
+    document.getElementById('rhythm-row').style.display = 'none';
   }
   const lengthRow = document.getElementById('length-row');
   if (seed.kind === 'voice') {

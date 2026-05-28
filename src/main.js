@@ -42,6 +42,7 @@ import './transport.js';
 import './bloom-wind-config.js';
 import './midi-log-panel.js';
 import './metronome.js';
+import './aura-tooltip.js';
 
 // Wire the cross-module handlers that break import cycles.
 setTakeSnapshotFn(takeSnapshot);

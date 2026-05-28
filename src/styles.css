@@ -1192,3 +1192,56 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .mlog-cat-activeSense .mlog-decoded { color: rgba(255, 255, 255, 0.20); }
 .mlog-cat-note        .mlog-decoded { color: rgba(154, 233, 168, 0.95); }
 .mlog-cat-cc          .mlog-decoded { color: rgba(180, 220, 250, 0.95); }
+
+/* === Aura tooltip ===
+   Shows on hover over a seed; lists every aura currently affecting
+   it with intensity (or computed multiplier for gain / mute). Live-
+   updated while hovering. */
+.aura-tooltip {
+  position: fixed;
+  padding: 8px 10px;
+  min-width: 160px;
+  background: rgba(20, 24, 32, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--ink, #e8e8e8);
+  pointer-events: none;
+  z-index: 90;
+  display: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.aura-tooltip.open { display: block; }
+.aura-tooltip-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.aura-tooltip-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.aura-tooltip-row .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.aura-tooltip-row .name {
+  color: rgba(255, 255, 255, 0.75);
+}
+.aura-tooltip-row .val {
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 500;
+  text-align: right;
+}
+.aura-tooltip-empty {
+  color: rgba(255, 255, 255, 0.4);
+  font-style: italic;
+  padding: 2px 0;
+}

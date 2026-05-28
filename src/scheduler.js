@@ -26,6 +26,7 @@ import {
   auraIntensityForSeed,
 } from './seeds.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
+import { refreshTooltip as refreshAuraTooltip } from './aura-tooltip.js';
 
 let stepHighlightHandler = null;
 export function setStepHighlightHandler(fn) { stepHighlightHandler = fn; }
@@ -413,6 +414,9 @@ function visualTick() {
   const now = audioCtx ? audioCtx.currentTime : 0;
   physicsStep();
   updateAuraModulation();
+  // Aura-tooltip live refresh — short-circuits inside the module
+  // when nothing is hovered.
+  refreshAuraTooltip();
   for (const seed of seeds) {
     const node = seedNodes.get(seed.id);
     if (!node) continue;
