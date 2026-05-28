@@ -122,6 +122,9 @@ export function tryCreateContext() {
     // hit if a slower machine struggles, but the trade-off is worth
     // it for a live-playable feel.
     audioCtx = new Ctx({ latencyHint: 'interactive' });
+    // Diagnostic handle — lets the user inspect audioCtx.outputLatency
+    // and friends from DevTools without needing module internals.
+    if (typeof window !== 'undefined') window.murmurAudio = audioCtx;
     // Master chain: masterGain → masterLimiter → destination.
     // The limiter is a high-ratio compressor that catches transient
     // peaks above ~-2 dBFS so a loud chord or a hot drum hit doesn't

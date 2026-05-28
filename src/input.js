@@ -550,26 +550,42 @@ if (typeof setInterval !== 'undefined') {
 
 if (typeof window !== 'undefined') {
   window.murmurLatency = () => {
-    const audioMs = audioCtx ? ((audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0)) * 1000 : null;
-    if (latencyHistory.length === 0) {
-      console.log('[latency] audio buffer:', audioMs == null ? 'audio context not started' : audioMs.toFixed(2) + ' ms');
-      console.log('[latency] no MIDI notes captured yet — play a key to measure midi latency.');
-      return { audio: audioMs, midi: null, samples: 0 };
+    const baseMs = audioCtx ? (audioCtx.baseLatency || 0) * 1000 : 0;
+    const outputMs = audioCtx ? (audioCtx.outputLatency || 0) * 1000 : 0;
+    const audioMs = audioCtx ? baseMs + outputMs : null;
+    const sampleRate = audioCtx ? audioCtx.sampleRate : null;
+    const rows = [
+      { phase: 'audio.base (script render buffer)', ms: baseMs.toFixed(2) },
+      { phase: 'audio.output (device + system)', ms: outputMs.toFixed(2) },
+      { phase: 'audio.total = base + output', ms: audioMs == null ? '—' : audioMs.toFixed(2) },
+    ];
+    if (latencyHistory.length > 0) {
+      const last = latencyHistory[latencyHistory.length - 1];
+      const avg = latencyHistory.reduce((s, x) => s + x.midi, 0) / latencyHistory.length;
+      rows.push({ phase: 'midi.last (delivery + handler)', ms: last.midi.toFixed(2) });
+      rows.push({ phase: 'midi.avg (rolling 50)', ms: avg.toFixed(2) });
+      if (audioMs != null) {
+        rows.push({ phase: 'TOTAL keypress = midi.last + audio.total', ms: (last.midi + audioMs).toFixed(2) });
+      }
+    } else {
+      rows.push({ phase: 'midi', ms: 'no presses yet' });
     }
-    const last = latencyHistory[latencyHistory.length - 1];
-    const avg = (k) => latencyHistory.reduce((s, x) => s + x[k], 0) / latencyHistory.length;
-    const summary = {
-      audio: audioMs,
-      midi: { last: last.midi, avg: avg('midi') },
-      total_keypress: audioMs == null ? null : audioMs + last.midi,
-      samples: latencyHistory.length,
+    console.table(rows);
+    console.log('[latency] sampleRate:', sampleRate, 'Hz · context state:', audioCtx && audioCtx.state);
+    if (outputMs > 60) {
+      console.log('[latency] %coutputLatency is high — common causes: Bluetooth audio (A2DP ≈ 150-300ms), virtual audio device, OS audio session with a fat buffer. Try wired output / a different audio device in the OS sound settings.', 'color:#ffc56b');
+    }
+    return {
+      audio: { base: baseMs, output: outputMs, total: audioMs, sampleRate },
+      midi: latencyHistory.length > 0
+        ? { last: latencyHistory[latencyHistory.length - 1].midi,
+            avg: latencyHistory.reduce((s, x) => s + x.midi, 0) / latencyHistory.length,
+            samples: latencyHistory.length }
+        : null,
+      total_keypress: latencyHistory.length > 0 && audioMs != null
+        ? latencyHistory[latencyHistory.length - 1].midi + audioMs
+        : null,
     };
-    console.table([
-      { phase: 'audio (buffer + driver)', last: audioMs == null ? '—' : audioMs.toFixed(2), avg: audioMs == null ? '—' : audioMs.toFixed(2) },
-      { phase: 'midi (delivery + handler)', last: last.midi.toFixed(2), avg: avg('midi').toFixed(2) },
-      { phase: 'total keypress (= midi + audio)', last: audioMs == null ? '—' : (last.midi + audioMs).toFixed(2), avg: audioMs == null ? '—' : (avg('midi') + audioMs).toFixed(2) },
-    ]);
-    return summary;
   };
 }
 
