@@ -60,9 +60,23 @@ let realtimeOut = null;
 // Pick the DAW port specifically. Fall back to spraying every
 // MiniLab-named port if name-matching fails (different firmware /
 // OS might have different conventions).
+// Coalesces duplicate connect attempts. WebMIDI state-change events
+// fire in clusters when ports enumerate, and our debounced refresh
+// catches most of them — but on some systems a second cluster lands
+// just after the debounce window closes, producing a re-connect at
+// +0.28s. Each connect resends the DAW handshake + initial paints,
+// flooding the device. Suppress if we already connected the same
+// DAW port within the last 1500ms.
+let lastConnectMs = 0;
+let lastConnectDawName = null;
+
 export function connectMinilab(outputs) {
   const allMinilab = (outputs || []).filter(o => PORT_NAME_DEVICE.test(o.name || ''));
   const dawPort = allMinilab.find(o => PORT_NAME_DAW.test(o.name || ''));
+  const nowMs = performance.now();
+  if (dawPort && dawPort.name === lastConnectDawName && nowMs - lastConnectMs < 1500) {
+    return true;
+  }
   if (dawPort) midiOuts = [dawPort];
   else if (allMinilab.length > 0) midiOuts = allMinilab;
   else if (outputs && outputs.length > 0) midiOuts = [outputs[0]];
@@ -93,16 +107,20 @@ export function connectMinilab(outputs) {
   // implementation) is critical — pad LEDs persist when written this
   // early, but later paints get clobbered by the device's Ableton-
   // style frame loop. The later paints are a hedge for slow boots.
+  // Start from a clean cache so the first paint actually fires —
+  // the device may have lost LEDs in a previous session.
+  lastLedSent.clear();
+  lastScreenPayload = null;
   setTimeout(() => { paintAllPads(); paintScreen(); }, 60);
+  // The 600ms / 1500ms defensive paints are diffed by setLed +
+  // writeScreen, so they become no-ops if the 60ms paint took. They
+  // only re-send bytes that actually need to change.
   setTimeout(() => { paintAllPads(); paintScreen(); }, 600);
   setTimeout(() => { paintAllPads(); paintScreen(); }, 1500);
-  // One-time hint about setting the device-side arp Sync to Auto/Ext.
-  // Suppressed on repeat connects via localStorage.
   setTimeout(showArpSyncHint, 1500);
-  // Kick off the continuous clock-tick stream — runs regardless of
-  // murmur's play state so the MiniLab arp can lock to our tempo as
-  // soon as the user engages it on the device.
   ensureClockTimer();
+  lastConnectMs = performance.now();
+  lastConnectDawName = dawPort ? dawPort.name : null;
   return true;
 }
 
@@ -122,6 +140,10 @@ export function disconnectMinilab() {
   sendRaw(SYSEX_CMD.DISCONNECT_DAW);
   midiOuts = [];
   stopClockTimer();
+  lastLedSent.clear();
+  lastScreenPayload = null;
+  lastConnectMs = 0;
+  lastConnectDawName = null;
 }
 
 function sendRaw(bytes) {
@@ -157,9 +179,28 @@ function rgb7(r, g, b) {
   return [r & 0x7F, g & 0x7F, b & 0x7F];
 }
 
+// Diff cache for LED writes. The MiniLab 3 cannot keep up with a
+// stream of redundant SysEx — earlier we sent the full pad-bank +
+// transport repaint on every UI event (plant-mode change, transport
+// change, selection change) plus three defensive repaints at 60ms /
+// 600ms / 1500ms after every connect. That worked out to ~150 SysEx
+// in ~2s on first boot, which deafened the device. We now suppress
+// any LED write whose RGB triple matches what we last sent. Cleared
+// on disconnect so a reconnect starts from a known state.
+const lastLedSent = new Map();   // id → "r,g,b"
+
 function setLed(id, r, g, b) {
+  const key = `${r & 0x7F},${g & 0x7F},${b & 0x7F}`;
+  if (lastLedSent.get(id) === key) return;
+  lastLedSent.set(id, key);
   sendRaw([...SYSEX_CMD.LED_PAINT, id, ...rgb7(r, g, b)]);
 }
+
+// Diff cache for the OLED. The screen update is large (~36 bytes)
+// and was firing repeatedly with identical content for the same
+// reason as the LED flood. Suppress when the rendered payload
+// matches the last successful send.
+let lastScreenPayload = null;
 
 // LED diagnostic — run from DevTools as `murmurTestPads()`. Paints a
 // distinct 16-colour rainbow across both pad banks. If the device
@@ -648,6 +689,14 @@ function writeScreen(mode, transient, line1, line2, picP, picA, picE) {
     0x01, ...asciiBytes(line1, 10), 0x00,
     0x02, ...asciiBytes(line2, 18), 0x00,
   ];
+  // Only diff persistent (non-transient) screen writes. Popups
+  // intentionally re-fire — that's how the device knows to reset
+  // its dismiss timer.
+  if (!(transient & 0x7F)) {
+    const sig = body.join(',');
+    if (sig === lastScreenPayload) return;
+    lastScreenPayload = sig;
+  }
   sendRaw(body);
 }
 

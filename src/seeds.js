@@ -501,7 +501,13 @@ export function renderSpheres() {
 // Active streams cache:
 //   key  = `seedId-auraId`
 //   val  = { gNode, particles: [<circle>...], phases: [0..1...] }
-const PARTICLES_PER_STREAM = 5;
+// More particles, larger, brighter — the previous 5 small dots at the
+// aura's colour got lost against the aura's point cloud. Now each
+// particle carries the SEED's colour (it's material being torn off the
+// seed, so it stays seed-coloured) and there are enough of them to
+// read as a continuous stream.
+const PARTICLES_PER_STREAM = 9;
+const PARTICLE_BASE_R = 3.5;
 const tetherStreams = new Map();
 
 function ensureTetherStream(key, v, m, intensity) {
@@ -513,18 +519,30 @@ function ensureTetherStream(key, v, m, intensity) {
     const phases = [];
     for (let i = 0; i < PARTICLES_PER_STREAM; i++) {
       const c = document.createElementNS(SVGNS, 'circle');
-      c.setAttribute('r', '2.5');
+      c.setAttribute('r', String(PARTICLE_BASE_R));
+      // Soft outer halo via stroke makes each particle pop against the
+      // aura's point cloud regardless of background colour. No filter
+      // node — SVG filters tank perf at our particle count.
+      c.setAttribute('stroke', m.color);
+      c.setAttribute('stroke-width', '1');
+      c.setAttribute('stroke-opacity', '0.6');
       g.appendChild(c);
       particles.push(c);
-      phases.push(Math.random());   // stagger initial positions
+      // Evenly spaced phases instead of pure random — gives a steady
+      // visible chain instead of clumps that briefly look empty.
+      phases.push(i / PARTICLES_PER_STREAM);
     }
     tethersLayer.appendChild(g);
     cached = { gNode: g, particles, phases };
     tetherStreams.set(key, cached);
   }
-  // Update colour + intensity-based opacity each render. Colour
-  // blends from seed → aura along the stream (set in animation).
-  for (const p of cached.particles) p.setAttribute('fill', m.color);
+  // Particles are coloured with the SEED's hue (material being pulled
+  // off the seed) with the aura's hue as the halo — communicates the
+  // direction of flow.
+  for (const p of cached.particles) {
+    p.setAttribute('fill', v.color || '#fff');
+    p.setAttribute('stroke', m.color);
+  }
   cached.gNode.dataset.intensity = intensity;
   cached.gNode.dataset.vId = v.id;
   cached.gNode.dataset.mId = m.id;
@@ -598,13 +616,15 @@ export function animateTethers() {
       const p = cached.particles[i];
       p.setAttribute('cx', px.toFixed(1));
       p.setAttribute('cy', py.toFixed(1));
-      // Fade + shrink as the particle approaches the aura — it's
-      // being absorbed. Plus a slight pulse near the seed-end so
-      // material READS as leaving the surface.
-      const fade = (1 - t) * 0.5 + 0.5;             // 1.0 at seed → 0.5 at aura
-      const shrink = (1 - t * 0.55).toFixed(2);     // shrink to 45% at aura
-      p.setAttribute('opacity', (intensity * fade).toFixed(3));
-      p.setAttribute('r', (2.5 * shrink));
+      // Bright at the seed-end (just torn off) and fades as the
+      // particle is "absorbed" into the aura's centre. Shrinks too —
+      // the gravitational stretch metaphor. We keep a higher floor
+      // than before so the streams stay readable at lower intensities.
+      const fade = (1 - t) * 0.55 + 0.45;
+      const shrink = (1 - t * 0.6).toFixed(2);
+      const opacity = Math.min(1, intensity * 1.2) * fade;
+      p.setAttribute('opacity', opacity.toFixed(3));
+      p.setAttribute('r', (PARTICLE_BASE_R * shrink).toFixed(2));
     }
   }
 }

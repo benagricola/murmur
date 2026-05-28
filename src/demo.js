@@ -172,7 +172,10 @@ function plantTechno() {
 // the 1, atmospheric chord pad. Cloud reverb engulfs the pad +
 // sub for depth.
 function plantDnB() {
-  setBPM(174);
+  // 160 BPM — still drum-and-bass tempo but less frantic than 174.
+  // The previous tempo + dense 16th-note hat layer made the demo
+  // feel "too much going on" before the user could hear anything else.
+  setBPM(160);
   const stepMs = BAR_MS / 16;
 
   const cloud = makeSeed({
@@ -185,7 +188,7 @@ function plantDnB() {
   const ripple = makeSeed({
     kind: 'modifier', modifierKind: 'ripple',
     cx: 1100, cy: 320, r: 26, sphereR: 220,
-    delayMs: BAR_MS * 3/8,  // dotted-eighth at 174 BPM
+    delayMs: BAR_MS * 3/8,
     harmonics: makeHarmonics({ 4: 0.05 }),
     label: 'ripple',
   });
@@ -193,31 +196,26 @@ function plantDnB() {
   timbredSeed('kick', {
     cx: 220, cy: 660, r: 56, fundamental: 50,
     intervalMs: stepMs, gain: 0.42, label: 'kick',
-    // 1 and the 'and of 3' (step 10) — classic amen punctuation
     pattern: step16('X.........X.....'),
   });
   timbredSeed('snare', {
     cx: 400, cy: 680, r: 42, fundamental: 220,
-    intervalMs: stepMs, gain: 0.36, label: 'snare',
-    pattern: step16('....X..2....X..3'),
+    intervalMs: stepMs, gain: 0.34, label: 'snare',
+    // Clean 2 + 4; ghost notes removed — they were busying up the bar
+    pattern: step16('....X.......X...'),
   });
   timbredSeed('hat', {
     cx: 560, cy: 620, r: 28, fundamental: 1200,
     intervalMs: stepMs, gain: 0.18, label: 'hat',
-    pattern: step16('x4x5x4x6x4x5x4x7'),
+    // Sparser 8th-note hats with a syncopated accent — was 16 hits/bar,
+    // now 8, giving space for the bass + melody to be heard.
+    pattern: step16('x...5...x...6...'),
   });
   timbredSeed('bass', {
-    cx: 760, cy: 580, r: 60, fundamental: 41,  // E1
+    cx: 760, cy: 580, r: 60, fundamental: 41,
     intervalMs: stepMs, gain: 0.44, label: 'sub',
-    // Long sub note on 1, retrigger 9, drop on 13
     pattern: notes16([0, null, null, null, null, null, null, null,
                        0, null, null, null, -3, null, null, null]),
-  });
-  timbredSeed('bass', {
-    cx: 860, cy: 540, r: 44, fundamental: 110,
-    intervalMs: stepMs, gain: 0.24, label: 'bass',
-    pattern: notes16([0, null, 7, null, null, null, 0, null,
-                       0, null, null, 7, null, null, 5, null]),
   });
   timbredSeed('melody', {
     cx: 1080, cy: 360, r: 42, fundamental: 440,

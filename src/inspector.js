@@ -12,7 +12,10 @@ import {
 import { audioCtx, NUM_HARMONICS } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
 import { createReverbIR, makeDriveCurve, makeBitCrushCurve } from './audio/chains.js';
-import { TIMBRE_ROLES } from './timbres.js';
+import {
+  TIMBRE_ROLES, LIVE_TIMBRE_CYCLE_ROLES,
+  setLiveRole, regenerateLiveTimbre, revertLiveTimbre, liveTimbre,
+} from './timbres.js';
 import { seeds, seedById, state } from './state.js';
 import {
   SVGNS, renderSeed, removeSeed, radiusForFundamental, syncRenderedSeeds,
@@ -66,6 +69,7 @@ function buildPicker(el, options, onSelect, getCurrent) {
 export function selectSeed(id) {
   const seed = seedById(id);
   if (!seed) return;
+  inspectorEl.dataset.mode = 'seed';
   state.selectedSeedId = id;
   syncRenderedSeeds();
   document.getElementById('insp-title').textContent = seed.label;
@@ -789,20 +793,62 @@ document.getElementById('insp-close').addEventListener('click', () => {
   closeInspector();
 });
 
-// Close + fully reset the inspector. Used by the close button and
-// by anything that needs the panel to start cold (e.g. selecting a
-// different seed after closing). Clears the inner text so a stale
-// label doesn't briefly flash before the new selection rebuilds.
+// Close + fully reset the inspector. When the user explicitly
+// dismisses a seed selection we fall back to the live-timbre
+// template panel rather than leaving an empty void — that way the
+// inspector is always showing what would be planted next.
 export function closeInspector() {
-  inspectorEl.classList.remove('open');
   state.selectedSeedId = null;
-  document.getElementById('insp-title').textContent = '';
-  document.getElementById('insp-sub').textContent = '';
   const capInfo = document.getElementById('captured-info');
   if (capInfo) capInfo.style.display = 'none';
   syncRenderedSeeds();
   refreshSelectionLights();
   paintScreen();
+  showLiveTemplate();
+}
+
+// "Live timbre" panel — shown whenever there's no real selection so
+// the inspector is always communicating what the NEXT plant will be.
+// Exposes role swap + re-roll + history-step. Deeper per-parameter
+// editing (envelope, layer mix, etc.) is task #57's follow-up; this
+// is the minimal-viable shipping increment.
+export function showLiveTemplate() {
+  inspectorEl.classList.add('open');
+  inspectorEl.dataset.mode = 'template';
+  const t = liveTimbre || {};
+  const role = t.role || 'melody';
+  const patchName = (t.patch && t.patch.name) || t.name || '';
+  document.getElementById('insp-title').textContent = 'live timbre';
+  document.getElementById('insp-sub').textContent =
+    role + (patchName ? ' · ' + patchName : '');
+
+  // Show only the rows that make sense for a template: role picker +
+  // regen button. Everything else (pitch, rhythm, pattern, etc.)
+  // refers to a planted seed and gets hidden.
+  const hideIds = [
+    'pitch-row', 'rhythm-row', 'length-row', 'harmonics-row',
+    'pattern-row', 'sphere-row', 'falloff-row',
+    'edge-intensity-row', 'center-intensity-row',
+    'mute-row', 'volume-row', 'wanderlust-row', 'quantize-row',
+    'delete-btn',
+  ];
+  for (const id of hideIds) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+  const presetRow = document.getElementById('preset-row');
+  const regenBtn = document.getElementById('regen-btn');
+  if (presetRow) presetRow.style.display = '';
+  if (regenBtn) regenBtn.style.display = '';
+  buildPicker(
+    document.getElementById('preset-picker'),
+    LIVE_TIMBRE_CYCLE_ROLES.map(k => ({ label: TIMBRE_ROLES[k].label, key: k })),
+    (opt) => {
+      setLiveRole(opt.key);
+      showLiveTemplate();
+    },
+    () => Math.max(0, LIVE_TIMBRE_CYCLE_ROLES.indexOf(role)),
+  );
 }
 
 // Re-render the inspector for the currently-selected seed. Cheap to
@@ -896,6 +942,13 @@ document.getElementById('loop-toggle').addEventListener('click', () => {
 });
 
 document.getElementById('regen-btn').addEventListener('click', async () => {
+  // Template-mode regen: re-roll the live timbre that NEXT plant will
+  // use. No seed yet, so just refresh the panel display.
+  if (inspectorEl.dataset.mode === 'template') {
+    regenerateLiveTimbre();
+    showLiveTemplate();
+    return;
+  }
   const s = seedById(state.selectedSeedId);
   if (!s || s.kind !== 'voice') return;
   const roleKey = s.role || 'melody';

@@ -32,7 +32,7 @@ import './audio/drum-kit.js';
 import './seeds.js';
 import './scheduler.js';
 
-import { setTakeSnapshotFn, setReevaluateAllCapturesFn } from './inspector.js';
+import { setTakeSnapshotFn, setReevaluateAllCapturesFn, showLiveTemplate } from './inspector.js';
 import { takeSnapshot, setLiveNoteOffFn } from './snapshots.js';
 import { liveNoteOff } from './input.js';
 import { reevaluateAllCaptures } from './pointer.js';
@@ -50,3 +50,8 @@ setReevaluateAllCapturesFn(reevaluateAllCaptures);
 setLiveNoteOffFn(liveNoteOff);
 
 import './demo.js';
+
+// Inspector opens to the live-timbre template by default so the user
+// always sees what the next plant will be, with controls to re-roll
+// or swap roles before pressing a key.
+showLiveTemplate();

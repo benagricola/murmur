@@ -385,3 +385,18 @@ export function revertLiveTimbre() {
 export function liveTimbreHistoryFor(role) {
   return (liveTimbreHistory[role] || []).slice();
 }
+
+// Jump straight to a named role (rather than scrolling through the
+// cycle). Used by the inspector's "live timbre" template panel so the
+// user can pick any pitched role from a chip strip; falls back to
+// rollLiveTimbre's no-op if the role isn't in the cycle.
+export function setLiveRole(role) {
+  const idx = LIVE_TIMBRE_CYCLE.indexOf(role);
+  if (idx < 0) return false;
+  liveTimbreIdx = idx;
+  liveTimbre = ensureRolePatch(role);
+  paintActiveRole(role);
+  return true;
+}
+
+export const LIVE_TIMBRE_CYCLE_ROLES = LIVE_TIMBRE_CYCLE.slice();
