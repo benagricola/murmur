@@ -551,6 +551,31 @@ function updateVariationInfo(seed) {
   info.textContent = `var ${idx}/${bank.length}`;
   if (removeBtn) removeBtn.style.display = bank.length > 1 ? '' : 'none';
 
+  // Navigation chips — one per variant. Click switches the seed's
+  // active pattern; the editor + scheduler re-read it immediately.
+  // Without this the user could record variants but never get back
+  // to delete the first one. Hidden when there's only one.
+  const chips = document.getElementById('variation-chips');
+  if (chips) {
+    chips.innerHTML = '';
+    if (bank.length > 1) {
+      bank.forEach((b, i) => {
+        const chip = document.createElement('button');
+        chip.className = 'variation-chip' + (i === seed.patternBankIdx ? ' active' : '');
+        chip.textContent = String(i + 1);
+        chip.title = `switch to variation ${i + 1} (${b.steps.length} steps)`;
+        chip.addEventListener('click', () => {
+          seed.patternBankIdx = i;
+          seed.pattern = bank[i].steps;
+          renderPatternEditor(seed);
+          renderVelocityEditor(seed);
+          updatePatternLoopInfo(seed);
+        });
+        chips.appendChild(chip);
+      });
+    }
+  }
+
   // Splitter — only useful when the current variant has enough steps
   // to divide. We offer 2/4/8-way splits whenever the step count is
   // divisible. With a 4-step pattern we only show "split 2"; with a
