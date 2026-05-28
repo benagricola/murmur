@@ -107,9 +107,17 @@ export function finishRecording() {
 
   if (tonalNotes.length === 0) return;
   const tonalBuf = { ...buf, notes: tonalNotes };
-  const result = phraseFromRecording(tonalBuf);
-  if (!result) return;
+  // When recording into an existing seed, lock the grid resolution
+  // to that seed's step length so every variant shares the same
+  // rhythmic ruler — otherwise the recording's own derived stepMs
+  // could be 16ths while the seed's pattern is 32nds (or vice
+  // versa), and the playback rate would be wrong relative to the
+  // bar. For fresh seed planting, no constraint — phraseFromRecording
+  // picks the natural grid for the take.
   const sel = seedById(state.selectedSeedId);
+  const forcedStepMs = (sel && sel.kind === 'voice') ? sel.intervalMs : null;
+  const result = phraseFromRecording(tonalBuf, forcedStepMs);
+  if (!result) return;
   if (sel && sel.kind === 'voice') {
     // With a voice seed selected, recording APPENDS a new variant to
     // the bank instead of overwriting. The user can riff multiple
@@ -163,7 +171,7 @@ function checkAutoFinishRecording() {
 // they get F#. Earlier guardrails also forced pitch onto the active
 // scale, which silently changed wrong-note jazz inflections into
 // "clean" ones the user never played. Quantize is for timing only.
-function phraseFromRecording(buf) {
+function phraseFromRecording(buf, forcedStepMs) {
   const notes = buf.notes;
   if (notes.length === 0) return null;
 
@@ -171,16 +179,21 @@ function phraseFromRecording(buf) {
   const fundamentalMidi = midis[Math.floor(midis.length / 2)];
   const fundamentalFreq = freqFromMidi(fundamentalMidi);
 
-  const naturalStepMs = state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32);
-  const stepsPerBar = state.guardrails ? 16 : 32;
-  // Up to 4 bars at fine resolution before the resolution expands.
-  // Previously we capped at 1 bar (16 steps), which forced longer
-  // recordings into a coarser grid and produced odd timing.
+  // When recording a variant into an existing seed, the caller passes
+  // forcedStepMs so the new pattern grids onto the same resolution
+  // the seed already uses. Without that, the recording picks its own
+  // step size and plays back at the wrong rate relative to the bar.
+  const naturalStepMs = forcedStepMs != null
+    ? forcedStepMs
+    : (state.guardrails ? (BAR_MS / 16) : (BAR_MS / 32));
+  const stepsPerBar = Math.max(1, Math.round(BAR_MS / naturalStepMs));
   const maxSteps = stepsPerBar * 4;
   const totalSpan = Math.max(...notes.map(n => n.t)) + naturalStepMs * 0.5;
-  const stepMs = totalSpan > maxSteps * naturalStepMs
-    ? totalSpan / maxSteps
-    : naturalStepMs;
+  // When forcedStepMs is set, never expand the grid past it — every
+  // variant must share the seed's resolution.
+  const stepMs = forcedStepMs != null
+    ? forcedStepMs
+    : (totalSpan > maxSteps * naturalStepMs ? totalSpan / maxSteps : naturalStepMs);
   // Round loop length UP to the nearest whole bar. Otherwise a
   // 1.5-bar recording loops at 1.5 bars and the seam between the
   // last note and the first repeat produces a double-hit.

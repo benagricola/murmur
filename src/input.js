@@ -74,12 +74,19 @@ export function liveNoteOff(midi) {
 
 // === noteOn / noteOff — the single entry point ===
 export function noteOn(midi, velocity, source = 'qwerty') {
+  // Run the live trigger first so we can record what the user
+  // ACTUALLY HEARD — `liveNoteOn` applies LIVE_ROLE_OCTAVE_SHIFT
+  // (bass plays two octaves below the pressed key, etc.). Storing
+  // the raw key would make playback an octave or more off from what
+  // the user heard while recording.
+  const playedMidi = liveNoteOn(midi, velocity, source);
   if (state.isRecording) {
     if (!state.recordingBuffer) {
       state.recordingBuffer = { startTime: performance.now(), notes: [], lastActivityMs: performance.now() };
     }
     state.recordingBuffer.notes.push({
-      midi,
+      midi: playedMidi,   // the sounded pitch — what playback should reproduce
+      key: midi,          // the original input key — used by noteOff to find this entry
       t: performance.now() - state.recordingBuffer.startTime,
       velocity,
       noteOnMs: performance.now(),
@@ -88,7 +95,6 @@ export function noteOn(midi, velocity, source = 'qwerty') {
     state.recordingBuffer.lastActivityMs = performance.now();
     rescheduleRecordingAutoFinish();
   }
-  const playedMidi = liveNoteOn(midi, velocity, source);
   highlightPianoKey(midi, true);
   highlightPianoKey(playedMidi, true);
   flashMidiLED();
@@ -99,7 +105,8 @@ export function noteOff(midi) {
   if (state.isRecording && state.recordingBuffer) {
     for (let i = state.recordingBuffer.notes.length - 1; i >= 0; i--) {
       const note = state.recordingBuffer.notes[i];
-      if (note.midi === midi && note.duration === null) {
+      const matches = note.key != null ? note.key === midi : note.midi === midi;
+      if (matches && note.duration === null) {
         note.duration = performance.now() - note.noteOnMs;
         break;
       }
