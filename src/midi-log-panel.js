@@ -285,7 +285,70 @@ function buildPanel() {
   header.querySelector('#mlog-close').addEventListener('click', () => {
     togglePanel(false);
   });
+  // Drag-by-header: lets the user move the panel out of the way so
+  // they can see things in the bottom-left corner. Position persists
+  // in localStorage. Click on chips / buttons inside the header is
+  // unaffected because we only start dragging on bare header area.
+  makeDraggable(root, header);
+  restorePosition(root);
   return { root, list };
+}
+
+function makeDraggable(root, handle) {
+  let dragging = false;
+  let startX = 0, startY = 0, originLeft = 0, originTop = 0;
+  handle.addEventListener('pointerdown', (e) => {
+    // Don't hijack button / chip clicks.
+    if (e.target.closest('button, .mlog-chip')) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    const rect = root.getBoundingClientRect();
+    originLeft = rect.left;
+    originTop = rect.top;
+    // Lock in absolute pixel position so the existing right/bottom
+    // CSS doesn't fight us during the drag.
+    root.style.left = originLeft + 'px';
+    root.style.top = originTop + 'px';
+    root.style.right = 'auto';
+    root.style.bottom = 'auto';
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    let left = originLeft + (e.clientX - startX);
+    let top  = originTop  + (e.clientY - startY);
+    // Constrain to viewport bounds so the panel doesn't get lost.
+    const w = root.offsetWidth, h = root.offsetHeight;
+    left = Math.max(0, Math.min(window.innerWidth - w, left));
+    top  = Math.max(0, Math.min(window.innerHeight - h, top));
+    root.style.left = left + 'px';
+    root.style.top = top + 'px';
+  });
+  handle.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+    try {
+      localStorage.setItem('murmur.mlogPos', JSON.stringify({
+        left: root.style.left, top: root.style.top,
+      }));
+    } catch (err) {}
+  });
+}
+
+function restorePosition(root) {
+  try {
+    const raw = localStorage.getItem('murmur.mlogPos');
+    if (!raw) return;
+    const pos = JSON.parse(raw);
+    if (pos && pos.left && pos.top) {
+      root.style.left = pos.left;
+      root.style.top = pos.top;
+      root.style.right = 'auto';
+      root.style.bottom = 'auto';
+    }
+  } catch (e) {}
 }
 
 export function togglePanel(want) {

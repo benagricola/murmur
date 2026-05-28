@@ -287,7 +287,10 @@ function renderChordOutlines(seed, node, audioNow) {
     if (opacity <= 0.01) continue;
     const scale = Math.max(0.35, Math.min(1.4, 1 - v.offset * 0.04));
     const path = document.createElementNS(SVGNS, 'path');
-    path.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * scale, seed.harmonics));
+    // Pass blobPhases so the chord outlines share the seed's
+    // unique shape orientation — otherwise they're misaligned from
+    // the seed body that uses phase offsets.
+    path.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r * scale, seed.harmonics, null, seed.blobPhases));
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', seed.color);
     path.setAttribute('stroke-width', '1.8');
