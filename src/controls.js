@@ -18,15 +18,16 @@ import {
   RHYTHM_OPTIONS, LENGTH_OPTIONS, SPHERE_OPTIONS,
   freqFromMidi, midiFromFreq, snapToScale, noteName,
 } from './constants.js';
-import { audioCtx, setMasterVol } from './audio/context.js';
+import { setMasterVol } from './audio/context.js';
 import { state, seedById } from './state.js';
 import { renderSeed } from './seeds.js';
 import { setBPM } from './transport.js';
-import { BPM, BAR_MS } from './tempo.js';
+import { BPM } from './tempo.js';
 import { popupEncoder, popupFader } from './output/minilab3.js';
 import { refreshInspector } from './inspector.js';
 import { liveTimbre, LIVE_ROLE_OCTAVE_SHIFT } from './timbres.js';
 import { ENCODER_CCS, FADER_CCS } from './devices/minilab3.js';
+import { auraEntry } from './auras/registry.js';
 
 function encoderSlot(cc) { return ENCODER_CCS.indexOf(cc); }
 function faderSlot(cc) { return FADER_CCS.indexOf(cc); }
@@ -229,34 +230,26 @@ function handleEncoderModifier(seed, idx, value) {
     return true;
   }
   if (idx === 1) {
-    if (seed.modifierKind === 'weave') {
-      seed.swing = ccRange(value, 0.50, 0.75);
-      popupEncoder(value, 'swing', seed.swing.toFixed(2));
-      refreshInspector();
-      return true;
-    }
-    if (seed.modifierKind === 'ripple') {
-      seed.delayMs = ccRange(value, 60, 1200);
-      seed.delayFrac = seed.delayMs / BAR_MS;   // canonical bar-fraction
-      if (seed.delayNode && audioCtx) {
-        seed.delayNode.delayTime.setTargetAtTime(seed.delayMs / 1000, audioCtx.currentTime, 0.02);
-      }
-      popupEncoder(value, 'delay', Math.round(seed.delayMs) + 'ms');
-      refreshInspector();
-      return true;
-    }
-    if (seed.modifierKind === 'cloud') {
-      seed.reverbSec = ccRange(value, 0.5, 5.0);
-      popupEncoder(value, 'size', seed.reverbSec.toFixed(1) + 's');
-      refreshInspector();
-      return true;
-    }
-    if (seed.modifierKind === 'poly') {
-      seed.polyFactor = ccRange(value, 0.4, 1.6);
-      popupEncoder(value, 'ratio', seed.polyFactor.toFixed(2));
-      refreshInspector();
-      return true;
-    }
+    // Kind-specific param comes from the aura registry. Encoder maps
+    // its continuous 0..127 across the param's range (explicit, or the
+    // span of its discrete option values). apply() handles the live
+    // audio-graph side effect. Works for every aura that has a param.
+    const param = auraEntry(seed.modifierKind) && auraEntry(seed.modifierKind).param;
+    if (!param) return false;
+    const [lo, hi] = param.range || optionSpan(param.options());
+    const val = ccRange(value, lo, hi);
+    param.apply(seed, val);
+    popupEncoder(value, param.label, param.format(val));
+    refreshInspector();
+    return true;
   }
   return false;
+}
+
+// Min/max of an option list's values — fallback encoder range for
+// auras that declare options but no explicit continuous range.
+function optionSpan(options) {
+  let lo = Infinity, hi = -Infinity;
+  for (const o of options) { if (o.val < lo) lo = o.val; if (o.val > hi) hi = o.val; }
+  return [lo, hi];
 }

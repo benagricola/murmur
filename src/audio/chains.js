@@ -3,8 +3,7 @@
 // by the modifier route their output into the chain's input. poly and
 // weave don't have audio graphs — they only affect scheduling.
 
-import { audioCtx, masterGain, onContextCreated } from './context.js';
-import { seeds } from '../state.js';
+import { audioCtx, masterGain } from './context.js';
 
 export function setupRippleChain(rippleSeed) {
   if (rippleSeed.delayInput) return;
@@ -263,22 +262,6 @@ export function makeBitCrushCurve(bits) {
   return arr;
 }
 
-export function setupModifierChain(seed) {
-  if (seed.kind !== 'modifier' || !audioCtx) return;
-  if (seed.modifierKind === 'ripple') setupRippleChain(seed);
-  if (seed.modifierKind === 'cloud') setupCloudChain(seed);
-  if (seed.modifierKind === 'drive') setupDriveChain(seed);
-  if (seed.modifierKind === 'squash') setupSquashChain(seed);
-  if (seed.modifierKind === 'wobble') setupWobbleChain(seed);
-  if (seed.modifierKind === 'crush') setupCrushChain(seed);
-  // gain / mute don't need their own chain — they modulate
-  // seed.auraGain on every captured voice each tick (see scheduler
-  // updateAuraModulation).
-}
-
-// Attach chains for any modifier seeds planted before audio existed.
-// Registered against the context-created hook so this runs once when
-// the AudioContext first comes online.
-onContextCreated(() => {
-  for (const s of seeds) setupModifierChain(s);
-});
+// Per-kind chain dispatch + the "attach chains once audio exists" hook
+// now live in auras/registry.js (setupAuraChain), so this file holds
+// only the audio-graph construction for each chain type.

@@ -10,7 +10,7 @@
 
 import { seeds, activeEvents, snapshots, activeLiveNotes, state, seedById } from './state.js';
 import { SVGNS, syncRenderedSeeds } from './seeds.js';
-import { setupModifierChain } from './audio/chains.js';
+import { setupAuraChain } from './auras/registry.js';
 import { inspectorEl, selectSeed } from './inspector.js';
 
 const MAX_SNAPSHOTS = 16;
@@ -144,7 +144,7 @@ export function revertToSnapshot(i) {
       newSeed.patternBankIdx = 0;
     }
     seeds.push(newSeed);
-    setupModifierChain(newSeed);
+    setupAuraChain(newSeed);
   }
   state.nextSeedId = snap.nextSeedId;
   if (!seedById(state.selectedSeedId)) {

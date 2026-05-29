@@ -25,6 +25,7 @@ import {
   SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
   updateSphereTransforms, auraIntensityForSeed,
 } from './seeds.js';
+import { auraGainDefault } from './auras/registry.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 import { refreshTooltip as refreshAuraTooltip } from './aura-tooltip.js';
 
@@ -482,10 +483,9 @@ function updateAuraModulation() {
       if (m.modifierKind !== 'gain' && m.modifierKind !== 'mute') continue;
       const intensity = auraIntensityForSeed(m, seed);
       if (intensity < 0.001) continue;
-      // gain: amount > 1 (boost), default 1.6
-      // mute: amount < 1 (reduce), default 0.0 (fully silent at centre)
-      const amount = m.gainAmount != null ? m.gainAmount
-        : (m.modifierKind === 'gain' ? 1.6 : 0.0);
+      // gain: amount > 1 (boost). mute: amount < 1 (reduce). Resting
+      // multiplier at full intensity defaults from the aura registry.
+      const amount = m.gainAmount != null ? m.gainAmount : auraGainDefault(m.modifierKind);
       mult *= 1 + (amount - 1) * intensity;
     }
     // Clamp to a sensible band so a stack of gain auras doesn't blow

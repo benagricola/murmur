@@ -13,6 +13,7 @@ import { audioCtx, masterGain, drumBus, initAudio } from './context.js';
 import { activeEvents, seeds, state, seedById } from '../state.js';
 import { BAR_MS } from '../tempo.js';
 import { auraIntensityForSeed } from '../seeds.js';
+import { auraEntry } from '../auras/registry.js';
 
 // PULSE_KINDS defaults — expandBars sets the shockwave velocity (how
 // many bars until maxRadius is reached); durationBars sets total
@@ -119,40 +120,19 @@ export function routeFinalOutput(seed, node) {
     // seeds drifting through the field have their NEXT notes attenuated
     // at the new position; currently-playing notes don't re-modulate
     // mid-flight.
-    for (const m of seeds) {
-      if (m.kind !== 'modifier') continue;
-      const intensity = auraIntensityForSeed(m, seed);
-      if (intensity < 0.02) continue;
-      if (m.modifierKind === 'ripple' && m.delayInput && audioCtx) {
+    if (audioCtx) {
+      for (const m of seeds) {
+        if (m.kind !== 'modifier') continue;
+        const entry = auraEntry(m.modifierKind);
+        if (!entry || !entry.chain) continue;     // gain/mute/poly/weave/shift: no audio send
+        const inputNode = m[entry.chain.inputProp];
+        if (!inputNode) continue;
+        const intensity = auraIntensityForSeed(m, seed);
+        if (intensity < 0.02) continue;
         const g = audioCtx.createGain();
         g.gain.value = intensity;
         node.connect(g);
-        g.connect(m.delayInput);
-      } else if (m.modifierKind === 'cloud' && m.reverbInput && audioCtx) {
-        const g = audioCtx.createGain();
-        g.gain.value = intensity;
-        node.connect(g);
-        g.connect(m.reverbInput);
-      } else if (m.modifierKind === 'drive' && m.driveInput && audioCtx) {
-        const g = audioCtx.createGain();
-        g.gain.value = intensity;
-        node.connect(g);
-        g.connect(m.driveInput);
-      } else if (m.modifierKind === 'squash' && m.squashInput && audioCtx) {
-        const g = audioCtx.createGain();
-        g.gain.value = intensity;
-        node.connect(g);
-        g.connect(m.squashInput);
-      } else if (m.modifierKind === 'wobble' && m.wobbleInput && audioCtx) {
-        const g = audioCtx.createGain();
-        g.gain.value = intensity;
-        node.connect(g);
-        g.connect(m.wobbleInput);
-      } else if (m.modifierKind === 'crush' && m.crushInput && audioCtx) {
-        const g = audioCtx.createGain();
-        g.gain.value = intensity;
-        node.connect(g);
-        g.connect(m.crushInput);
+        g.connect(inputNode);
       }
     }
   }
@@ -165,8 +145,8 @@ export function routeToModifiers(seed, node) {
   for (const id of seed.capturedByIds) {
     const m = seedById(id);
     if (!m) continue;
-    if (m.modifierKind === 'ripple' && m.delayInput) node.connect(m.delayInput);
-    if (m.modifierKind === 'cloud'  && m.reverbInput) node.connect(m.reverbInput);
+    const entry = auraEntry(m.modifierKind);
+    if (entry && entry.chain && m[entry.chain.inputProp]) node.connect(m[entry.chain.inputProp]);
   }
 }
 

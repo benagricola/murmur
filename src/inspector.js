@@ -5,13 +5,12 @@
 // snapshot history.
 
 import {
-  RHYTHM_OPTIONS, LENGTH_OPTIONS, SPHERE_OPTIONS, RIPPLE_DELAY_OPTIONS,
-  CLOUD_SIZE_OPTIONS, SWING_OPTIONS, POLY_RATIOS,
+  RHYTHM_OPTIONS, LENGTH_OPTIONS, SPHERE_OPTIONS,
   nearestOptionIdx, snapToScale, freqFromMidi, midiFromFreq, noteName,
 } from './constants.js';
 import { audioCtx, NUM_HARMONICS } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
-import { createReverbIR, makeDriveCurve, makeBitCrushCurve } from './audio/chains.js';
+import { auraEntry } from './auras/registry.js';
 import {
   TIMBRE_ROLES, LIVE_TIMBRE_CYCLE_ROLES,
   setLiveRole, regenerateLiveTimbre, revertLiveTimbre, liveTimbre,
@@ -48,6 +47,17 @@ for (let i = 0; i < NUM_HARMONICS; i++) {
   num.className = 'h-num';
   num.textContent = i + 2;
   hNumbersEl.appendChild(num);
+}
+
+// Index of the option whose .val is closest to `value` — used by the
+// registry-driven aura param picker to highlight the current setting.
+function nearestValIdx(options, value) {
+  let best = 0, bestDiff = Infinity;
+  for (let i = 0; i < options.length; i++) {
+    const d = Math.abs(options[i].val - value);
+    if (d < bestDiff) { bestDiff = d; best = i; }
+  }
+  return best;
 }
 
 function buildPicker(el, options, onSelect, getCurrent) {
@@ -137,251 +147,24 @@ export function selectSeed(id) {
   }
   const rhythmRow = document.getElementById('rhythm-row');
   rhythmRow.style.display = '';
-  if (seed.kind === 'modifier' && seed.modifierKind === 'weave') {
-    document.querySelector('#rhythm-row label').textContent = 'swing';
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      SWING_OPTIONS,
-      (opt) => {
-        seed.swing = opt.val;
-        for (const v of seeds) {
-          if (v.capturedByIds && v.capturedByIds.has(seed.id)) v.nextTrigger = 0;
-        }
-        takeSnapshotFn('swing: ' + opt.label);
-      },
-      () => {
-        const sw = seed.swing || 0.5;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < SWING_OPTIONS.length; i++) {
-          const d = Math.abs(SWING_OPTIONS[i].val - sw);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'ripple') {
-    document.querySelector('#rhythm-row label').textContent = 'delay';
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      RIPPLE_DELAY_OPTIONS,
-      (opt) => {
-        seed.delayMs = opt.ms;
-        seed.delayFrac = opt.frac;     // canonical bar-fraction storage
-        if (seed.delayNode) seed.delayNode.delayTime.setTargetAtTime(opt.ms / 1000, audioCtx.currentTime, 0.02);
-        takeSnapshotFn('tweaked delay');
-      },
-      () => nearestOptionIdx(RIPPLE_DELAY_OPTIONS, seed.delayMs)
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'cloud') {
-    document.querySelector('#rhythm-row label').textContent = 'size';
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      CLOUD_SIZE_OPTIONS.map(o => ({ label: o.label, ms: o.sec })),
-      (opt) => {
-        seed.reverbSec = opt.ms;
-        if (seed.convolver && audioCtx) {
-          seed.convolver.buffer = createReverbIR(opt.ms);
-        }
-        takeSnapshotFn('tweaked size');
-      },
-      () => nearestOptionIdx(CLOUD_SIZE_OPTIONS.map(o => ({ms: o.sec})), seed.reverbSec || 2.0)
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'poly') {
-    document.querySelector('#rhythm-row label').textContent = 'ratio';
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      POLY_RATIOS.map(r => ({ label: r.label, val: r.factor })),
-      (opt) => {
-        seed.polyFactor = opt.val;
-        for (const v of seeds) {
-          if (v.capturedByIds && v.capturedByIds.has(seed.id)) v.nextTrigger = 0;
-        }
-        takeSnapshotFn('ratio: ' + opt.label);
-      },
-      () => {
-        const pf = seed.polyFactor || 2/3;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < POLY_RATIOS.length; i++) {
-          const d = Math.abs(POLY_RATIOS[i].factor - pf);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'drive') {
-    document.querySelector('#rhythm-row label').textContent = 'drive';
-    const DRIVE_OPTIONS = [
-      { label: 'subtle', val: 0.5 },
-      { label: 'warm',   val: 1.0 },
-      { label: 'medium', val: 1.6 },
-      { label: 'strong', val: 2.2 },
-      { label: 'crush',  val: 3.0 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      DRIVE_OPTIONS,
-      (opt) => {
-        seed.driveAmount = opt.val;
-        if (seed.driveShaper && audioCtx) {
-          seed.driveShaper.curve = makeDriveCurve(opt.val);
-        }
-        takeSnapshotFn('drive: ' + opt.label);
-      },
-      () => {
-        const v = seed.driveAmount != null ? seed.driveAmount : 1.6;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < DRIVE_OPTIONS.length; i++) {
-          const d = Math.abs(DRIVE_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'gain') {
-    document.querySelector('#rhythm-row label').textContent = 'boost';
-    const GAIN_OPTIONS = [
-      { label: '1.2×', val: 1.2 },
-      { label: '1.5×', val: 1.5 },
-      { label: '2×',   val: 2.0 },
-      { label: '2.5×', val: 2.5 },
-      { label: '3×',   val: 3.0 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      GAIN_OPTIONS,
-      (opt) => { seed.gainAmount = opt.val; takeSnapshotFn('boost: ' + opt.label); },
-      () => {
-        const v = seed.gainAmount != null ? seed.gainAmount : 1.6;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < GAIN_OPTIONS.length; i++) {
-          const d = Math.abs(GAIN_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'squash') {
-    document.querySelector('#rhythm-row label').textContent = 'squash';
-    const SQUASH_OPTIONS = [
-      { label: 'glue',  val: 0.7 },
-      { label: 'pump',  val: 1.2 },
-      { label: 'slam',  val: 1.8 },
-      { label: 'crush', val: 2.5 },
-      { label: 'brick', val: 3.2 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      SQUASH_OPTIONS,
-      (opt) => {
-        seed.squashAmount = opt.val;
-        if (seed.squashComp && audioCtx) {
-          seed.squashComp.threshold.setTargetAtTime(-30 - opt.val * 4, audioCtx.currentTime, 0.02);
-          seed.squashComp.ratio.setTargetAtTime(6 + opt.val * 4, audioCtx.currentTime, 0.02);
-          if (seed.squashMakeup) {
-            seed.squashMakeup.gain.setTargetAtTime(1 + opt.val * 0.8, audioCtx.currentTime, 0.02);
-          }
-          if (seed.squashInput) {
-            seed.squashInput.gain.setTargetAtTime(1 + opt.val * 0.5, audioCtx.currentTime, 0.02);
-          }
-        }
-        takeSnapshotFn('squash: ' + opt.label);
-      },
-      () => {
-        const v = seed.squashAmount != null ? seed.squashAmount : 1.5;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < SQUASH_OPTIONS.length; i++) {
-          const d = Math.abs(SQUASH_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'wobble') {
-    document.querySelector('#rhythm-row label').textContent = 'wobble rate';
-    const WOBBLE_OPTIONS = [
-      { label: 'slow',  val: 1.5 },
-      { label: 'mid',   val: 3.0 },
-      { label: 'fast',  val: 4.5 },
-      { label: 'rapid', val: 7.0 },
-      { label: 'manic', val: 12.0 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      WOBBLE_OPTIONS,
-      (opt) => {
-        seed.wobbleRate = opt.val;
-        if (seed.wobbleLFO && audioCtx) {
-          seed.wobbleLFO.frequency.setTargetAtTime(opt.val, audioCtx.currentTime, 0.02);
-        }
-        takeSnapshotFn('wobble rate: ' + opt.label);
-      },
-      () => {
-        const v = seed.wobbleRate != null ? seed.wobbleRate : 4.5;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < WOBBLE_OPTIONS.length; i++) {
-          const d = Math.abs(WOBBLE_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'crush') {
-    document.querySelector('#rhythm-row label').textContent = 'crush';
-    const CRUSH_OPTIONS = [
-      { label: '8-bit', val: 8 },
-      { label: '6-bit', val: 6 },
-      { label: '5-bit', val: 5 },
-      { label: '4-bit', val: 4 },
-      { label: '3-bit', val: 3 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      CRUSH_OPTIONS,
-      (opt) => {
-        seed.crushBits = opt.val;
-        if (seed.crushShaper && audioCtx) {
-          seed.crushShaper.curve = makeBitCrushCurve(opt.val);
-        }
-        takeSnapshotFn('crush: ' + opt.label);
-      },
-      () => {
-        const v = seed.crushBits != null ? seed.crushBits : 5;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < CRUSH_OPTIONS.length; i++) {
-          const d = Math.abs(CRUSH_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'shift') {
-    // Shift aura has no kind-specific param — its strength is purely
-    // proximity-based (centerIntensity slider in the modifier-common
-    // block). Hide the rhythm row entirely.
-    document.getElementById('rhythm-row').style.display = 'none';
-  } else if (seed.kind === 'modifier' && seed.modifierKind === 'mute') {
-    document.querySelector('#rhythm-row label').textContent = 'hush';
-    const MUTE_OPTIONS = [
-      { label: '-3dB', val: 0.7 },
-      { label: '-6dB', val: 0.5 },
-      { label: '-12dB', val: 0.25 },
-      { label: '-24dB', val: 0.06 },
-      { label: 'silent', val: 0.0 },
-    ];
-    buildPicker(
-      document.getElementById('rhythm-picker'),
-      MUTE_OPTIONS,
-      (opt) => { seed.gainAmount = opt.val; takeSnapshotFn('hush: ' + opt.label); },
-      () => {
-        const v = seed.gainAmount != null ? seed.gainAmount : 0.0;
-        let best = 0, bestDiff = Infinity;
-        for (let i = 0; i < MUTE_OPTIONS.length; i++) {
-          const d = Math.abs(MUTE_OPTIONS[i].val - v);
-          if (d < bestDiff) { bestDiff = d; best = i; }
-        }
-        return best;
-      }
-    );
+  if (seed.kind === 'modifier') {
+    // Every aura's single kind-specific control is described by its
+    // registry entry's `param` (src/auras/registry.js). Auras with no
+    // tunable param (e.g. shift) hide the row.
+    const entry = auraEntry(seed.modifierKind);
+    const param = entry && entry.param;
+    if (param) {
+      const opts = param.options();
+      document.querySelector('#rhythm-row label').textContent = param.label;
+      buildPicker(
+        document.getElementById('rhythm-picker'),
+        opts,
+        (opt) => { param.apply(seed, opt.val); takeSnapshotFn(`${param.label}: ${opt.label}`); },
+        () => nearestValIdx(opts, seed[param.prop] != null ? seed[param.prop] : opts[0].val),
+      );
+    } else {
+      document.getElementById('rhythm-row').style.display = 'none';
+    }
   } else if (seed.kind === 'voice') {
     // For tonal seeds: how long each pattern STEP plays. Stretches /
     // compresses the whole pattern (not the rhythmic SHAPE — that's

@@ -9,6 +9,7 @@
 
 import { seeds, seedById } from './state.js';
 import { auraIntensityForSeed, seedsLayer } from './seeds.js';
+import { auraEntry, auraGainDefault } from './auras/registry.js';
 import { labelFor } from './labels.js';
 
 let tooltipEl = null;
@@ -96,9 +97,7 @@ function seedsInAura(aura) {
 function effectValueLabel(aura, intensity) {
   const kind = aura.modifierKind;
   if (kind === 'gain' || kind === 'mute') {
-    const amount = aura.gainAmount != null
-      ? aura.gainAmount
-      : (kind === 'gain' ? 1.6 : 0.0);
+    const amount = aura.gainAmount != null ? aura.gainAmount : auraGainDefault(kind);
     const mult = 1 + (amount - 1) * intensity;
     return `${mult.toFixed(2)}×`;
   }
@@ -186,18 +185,8 @@ export function refreshTooltip() {
 // kind-specific parameter so the user knows e.g. swing strength,
 // delay time, drive amount.
 function auraSettingsLine(aura) {
-  const k = aura.modifierKind;
-  if (k === 'weave')  return `swing ${(aura.swing || 0.5).toFixed(2)}`;
-  if (k === 'ripple') return `delay ${Math.round(aura.delayMs || 0)} ms`;
-  if (k === 'cloud')  return `reverb ${(aura.reverbSec || 0).toFixed(1)} s`;
-  if (k === 'poly')   return `ratio ${(aura.polyFactor || 1).toFixed(2)}`;
-  if (k === 'drive')  return `drive ×${(aura.driveAmount || 0).toFixed(1)}`;
-  if (k === 'gain')   return `boost ${(aura.gainAmount || 1).toFixed(2)}× at centre`;
-  if (k === 'mute')   return `hush ${(aura.gainAmount || 0).toFixed(2)}× at centre`;
-  if (k === 'squash') return `squash ×${(aura.squashAmount || 0).toFixed(1)}`;
-  if (k === 'wobble') return `wobble ${(aura.wobbleRate || 0).toFixed(1)} Hz`;
-  if (k === 'crush')  return `crush ${aura.crushBits || 5}-bit`;
-  return '';
+  const param = auraEntry(aura.modifierKind) && auraEntry(aura.modifierKind).param;
+  return param ? param.tooltip(aura) : '';
 }
 
 function escapeHtml(s) {

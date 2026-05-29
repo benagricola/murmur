@@ -10,15 +10,10 @@
 // (for chord outlines), and a text label. seedNodes maps seed.id →
 // these DOM refs.
 
-import {
-  WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR,
-  DRIVE_COLOR, GAIN_COLOR, MUTE_COLOR,
-  SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR, SHIFT_COLOR,
-  SEED_COLORS,
-} from './constants.js';
+import { SEED_COLORS } from './constants.js';
 import { BEAT_MS, BAR_MS } from './tempo.js';
 import { TIMBRE_ROLES } from './timbres.js';
-import { setupModifierChain } from './audio/chains.js';
+import { setupAuraChain, auraColor, auraEntry } from './auras/registry.js';
 import { forceStopByTag } from './audio/voices.js';
 import { NUM_HARMONICS } from './audio/context.js';
 import { seeds, seedById, state } from './state.js';
@@ -257,24 +252,14 @@ export function makeSeed(opts) {
   }
   if (!seed.color) {
     if (seed.kind === 'modifier') {
-      if      (seed.modifierKind === 'weave')  seed.color = WEAVE_COLOR;
-      else if (seed.modifierKind === 'ripple') seed.color = RIPPLE_COLOR;
-      else if (seed.modifierKind === 'cloud')  seed.color = CLOUD_COLOR;
-      else if (seed.modifierKind === 'poly')   seed.color = POLY_COLOR;
-      else if (seed.modifierKind === 'drive')  seed.color = DRIVE_COLOR;
-      else if (seed.modifierKind === 'gain')   seed.color = GAIN_COLOR;
-      else if (seed.modifierKind === 'mute')   seed.color = MUTE_COLOR;
-      else if (seed.modifierKind === 'squash') seed.color = SQUASH_COLOR;
-      else if (seed.modifierKind === 'wobble') seed.color = WOBBLE_COLOR;
-      else if (seed.modifierKind === 'crush')  seed.color = CRUSH_COLOR;
-      else if (seed.modifierKind === 'shift')  seed.color = SHIFT_COLOR;
+      seed.color = auraColor(seed.modifierKind) || '#888';
     } else {
       seed.color = (seed.role && TIMBRE_ROLES[seed.role])
         ? TIMBRE_ROLES[seed.role].color
         : SEED_COLORS[seeds.length % SEED_COLORS.length];
     }
   }
-  setupModifierChain(seed);
+  setupAuraChain(seed);
   seeds.push(seed);
   return seed;
 }
@@ -415,32 +400,25 @@ export function renderSeed(seed) {
   const atts = attachmentsForSeed(seed);
   if (seed.kind === 'modifier') {
     node.halo.setAttribute('filter', 'url(#halo-blur-small)');
-    if (seed.modifierKind === 'weave') {
-      node.core.setAttribute('class', 'seed-core weave-pulse');
-    } else if (seed.modifierKind === 'cloud') {
-      node.core.setAttribute('class', 'seed-core cloud-pulse');
-    } else if (seed.modifierKind === 'poly') {
-      node.core.setAttribute('class', 'seed-core poly-pulse');
-    } else {
-      node.core.setAttribute('class', 'seed-core');
-    }
-    if (seed.modifierKind === 'ripple' && node.ghosts.children.length === 0) {
-      const drifts = [
-        { gx: 14, gy: 6, delay: 0 },
-        { gx: 16, gy: -4, delay: 500 },
-        { gx: 10, gy: 12, delay: 1000 },
-      ];
-      drifts.forEach(d => {
-        const ghost = document.createElementNS(SVGNS, 'path');
-        ghost.setAttribute('fill', seed.color);
-        ghost.setAttribute('class', 'ripple-ghost');
-        ghost.style.setProperty('--gx', d.gx + 'px');
-        ghost.style.setProperty('--gy', d.gy + 'px');
-        ghost.style.animationDelay = d.delay + 'ms';
-        node.ghosts.appendChild(ghost);
-      });
-    }
-    if (seed.modifierKind === 'ripple') {
+    const entry = auraEntry(seed.modifierKind);
+    node.core.setAttribute('class', entry && entry.coreClass ? 'seed-core ' + entry.coreClass : 'seed-core');
+    if (entry && entry.ghosts) {
+      if (node.ghosts.children.length === 0) {
+        const drifts = [
+          { gx: 14, gy: 6, delay: 0 },
+          { gx: 16, gy: -4, delay: 500 },
+          { gx: 10, gy: 12, delay: 1000 },
+        ];
+        drifts.forEach(d => {
+          const ghost = document.createElementNS(SVGNS, 'path');
+          ghost.setAttribute('fill', seed.color);
+          ghost.setAttribute('class', 'ripple-ghost');
+          ghost.style.setProperty('--gx', d.gx + 'px');
+          ghost.style.setProperty('--gy', d.gy + 'px');
+          ghost.style.animationDelay = d.delay + 'ms';
+          node.ghosts.appendChild(ghost);
+        });
+      }
       for (const g of node.ghosts.children) {
         g.setAttribute('d', blobPath(seed.cx, seed.cy, seed.r, seed.harmonics, null, seed.blobPhases));
       }

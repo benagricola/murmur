@@ -16,7 +16,7 @@ import {
   canvasEl, canvasWrap, SVGNS,
   makeSeed, syncRenderedSeeds, renderSeed, renderSpheres, renderTethers,
 } from './seeds.js';
-import { setupModifierChain } from './audio/chains.js';
+import { setupAuraChain, auraEntry, auraHarmonics, auraBaseR } from './auras/registry.js';
 import {
   PULSE_KINDS, SWEEP_KINDS, spawnPulse, spawnSweep,
 } from './audio/events.js';
@@ -84,44 +84,23 @@ function startTap(c) {
 
 function plantModifierAt(c) {
   const modKind = state.plantMode;
-  const baseR = modKind === 'weave' ? 30
-              : modKind === 'ripple' ? 26
-              : modKind === 'poly' ? 28
-              : modKind === 'wobble' ? 30
-              : modKind === 'squash' ? 34
-              : modKind === 'crush' ? 28
-              : modKind === 'shift' ? 30
-              : 32;
-  // Tiny harmonic shape per modifier kind so the blob silhouette hints
-  // at character even before any voices are captured.
-  const harmonics = new Array(12).fill(0);
-  if      (modKind === 'weave')  { harmonics[2] = 0.06; harmonics[5] = 0.04; }
-  else if (modKind === 'ripple') { harmonics[2] = 0.05; harmonics[5] = 0.03; }
-  else if (modKind === 'poly')   { harmonics[1] = 0.06; harmonics[4] = 0.04; harmonics[7] = 0.03; }
-  else if (modKind === 'drive')  { harmonics[0] = 0.10; harmonics[2] = 0.07; harmonics[6] = 0.05; }
-  else if (modKind === 'gain')   { harmonics[0] = 0.08; harmonics[1] = 0.06; }
-  else if (modKind === 'mute')   { harmonics[3] = 0.04; harmonics[5] = 0.03; }
-  else if (modKind === 'squash') { harmonics[0] = 0.12; harmonics[1] = 0.04; }  // squat, dense
-  else if (modKind === 'wobble') { harmonics[1] = 0.09; harmonics[2] = 0.06; harmonics[3] = 0.04; }  // undulating
-  else if (modKind === 'crush')  { harmonics[4] = 0.08; harmonics[8] = 0.06; }  // jagged step
-  else if (modKind === 'shift')  { harmonics[2] = 0.07; harmonics[3] = 0.05; harmonics[5] = 0.04; }  // stirring
-  else                            { harmonics[1] = 0.03; harmonics[3] = 0.02; }
+  // baseR, blob-silhouette harmonics, and kind-specific defaults all
+  // come from the aura registry — see src/auras/registry.js.
+  const entry = auraEntry(modKind);
   const seed = makeSeed({
     kind: 'modifier', modifierKind: modKind,
     cx: c.x, cy: c.y,
-    r: baseR,
+    r: auraBaseR(modKind),
     intervalMs: BEAT_MS,
     sphereR: SPHERE_OPTIONS[1].r,
     delayMs: BAR_MS * 3/16,
     reverbSec: 2.0,
     polyFactor: 2/3,
-    // Phase 3 aura-kind specific defaults. Adjustable via inspector.
-    driveAmount: 1.6,
-    gainAmount: modKind === 'gain' ? 1.6 : (modKind === 'mute' ? 0.0 : 1.0),
-    harmonics,
+    harmonics: auraHarmonics(modKind),
+    ...(entry ? entry.defaults : {}),
     label: modKind,
   });
-  setupModifierChain(seed);
+  setupAuraChain(seed);
   for (const v of seeds.filter(s => s.kind === 'voice')) {
     const d = Math.hypot(v.cx - seed.cx, v.cy - seed.cy);
     if (d < seed.sphereR) {
