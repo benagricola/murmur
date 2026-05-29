@@ -10,11 +10,8 @@
 // future spatial-drum design canvases (#36): each slot will
 // eventually have its own canvas for sculpting the sound.
 //
-// Today's defaults reuse existing drum voices (kick / snare / hihat)
-// from src/audio/voices.js with slot-specific parameter tweaks.
-// Tom-low, tom-high, clap, and rim are stubs built from the same
-// voices with tuned params — sounding fine but not authentic. Future
-// work can add real clap, tom, and rim voices.
+// Each slot maps to a dedicated synthesis voice in src/audio/voices.js
+// (kick / snare / hihat / clap / tom / rim) with slot-specific params.
 
 import { BAR_MS } from '../tempo.js';
 
@@ -57,22 +54,18 @@ const SLOT_DEFINITIONS = [
   },
   {
     name: 'clap',
-    // Stub: a snare voice with the body de-emphasised and a crack
-    // bump. Sounds clap-ish; needs a real clap voice eventually.
     build: () => ({
-      layers: [{ voice: 'snare', gain: 0.9, params: {} }],
-      envelope: { attackMs: 4, releaseMs: 180 },
+      layers: [{ voice: 'clap', gain: 1, params: {} }],
+      envelope: { attackMs: 2, releaseMs: 180 },
       category: 'drum',
       designSlot: 4,
     }),
   },
   {
     name: 'tom-low',
-    // Stub: a kick voice tuned higher. Real tom would have a less
-    // pronounced click and longer ringing body.
     build: () => ({
-      layers: [{ voice: 'kick', gain: 0.85, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 350 },
+      layers: [{ voice: 'tom', gain: 1, params: { decayMs: 340 } }],
+      envelope: { attackMs: 2, releaseMs: 340 },
       category: 'drum',
       designSlot: 5,
     }),
@@ -80,18 +73,17 @@ const SLOT_DEFINITIONS = [
   {
     name: 'tom-high',
     build: () => ({
-      layers: [{ voice: 'kick', gain: 0.85, params: {} }],
-      envelope: { attackMs: 2, releaseMs: 250 },
+      layers: [{ voice: 'tom', gain: 1, params: { decayMs: 240 } }],
+      envelope: { attackMs: 2, releaseMs: 240 },
       category: 'drum',
       designSlot: 6,
     }),
   },
   {
     name: 'rim',
-    // Stub: a short closed-hat for the click character.
     build: () => ({
-      layers: [{ voice: 'hihat', gain: 0.6, params: { open: false } }],
-      envelope: { attackMs: 1, releaseMs: 40 },
+      layers: [{ voice: 'rim', gain: 1, params: {} }],
+      envelope: { attackMs: 1, releaseMs: 50 },
       category: 'drum',
       designSlot: 7,
     }),
@@ -112,10 +104,10 @@ export const DRUM_KIT_FUNDAMENTAL_HZ = [
   220,   // snare
   1100,  // closed hat
   1100,  // open hat
-  250,   // clap
-  140,   // tom-low
-  220,   // tom-high
-  3200,  // rim — high click
+  250,   // clap (noise-based; freq largely cosmetic)
+  140,   // tom-low — pitched membrane
+  220,   // tom-high — pitched membrane
+  1700,  // rim — woody click around 1.7kHz
 ];
 
 // Per-slot pad LED colour. Mostly mapped to drum-role conventions

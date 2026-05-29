@@ -492,6 +492,181 @@ VOICES.hihat = {
   },
 };
 
+// === CLAP ===
+// The defining feature of a clap is the BURST TRAIN — three or four
+// short noise spikes a few ms apart (many hands / room reflections)
+// followed by a longer diffuse tail. A single noise burst sounds like
+// a weak snare; the stutter is what reads as "clap". One noise source
+// through a bandpass (~1.2 kHz, the hand-smack formant), with the gain
+// envelope drawing the spikes + tail.
+VOICES.clap = {
+  params: {
+    bpfHz:      { type: 'log',    min: 600,  max: 2500, default: 1200 },
+    bpfQ:       { type: 'linear', min: 0.5,  max: 4,    default: 1.3 },
+    spreadMs:   { type: 'linear', min: 5,    max: 16,   default: 9 },
+    tailMs:     { type: 'log',    min: 60,   max: 300,  default: 130 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const out = audioCtx.createGain();
+    const clip = softClip(audioCtx);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = createNoiseBuffer(0.4);
+    const bpf = audioCtx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.value = params.bpfHz || 1200;
+    bpf.Q.value = params.bpfQ != null ? params.bpfQ : 1.3;
+    const env = audioCtx.createGain();
+    noise.connect(bpf); bpf.connect(env); env.connect(clip); clip.connect(out);
+
+    // Three tight spikes, then a fuller spike that decays into the tail.
+    const gap = (params.spreadMs || 9) / 1000;
+    const tail = (params.tailMs || 130) / 1000;
+    env.gain.setValueAtTime(0.0001, when);
+    for (let i = 0; i < 3; i++) {
+      const t0 = when + i * gap;
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.75, t0 + 0.0008);
+      env.gain.exponentialRampToValueAtTime(0.04, t0 + gap * 0.85);
+    }
+    const tStart = when + 3 * gap;
+    env.gain.setValueAtTime(0.04, tStart);
+    env.gain.linearRampToValueAtTime(0.95, tStart + 0.001);
+    env.gain.exponentialRampToValueAtTime(0.0008, tStart + tail);
+    noise.start(when);
+    return {
+      output: out,
+      stop: (whenStop) => {
+        const t = Math.max(whenStop, tStart + tail + 0.05);
+        try { noise.stop(t); } catch (e) {}
+      },
+      detune: null,
+    };
+  },
+};
+
+// === TOM ===
+// A pitched membrane: a sine body that glides DOWN in pitch over the
+// first ~80 ms (the head tensioning) and rings for a few hundred ms,
+// plus a faint detuned overtone for shell character and a soft stick
+// transient up top. Less click than a kick, no deep sub — clearly
+// pitched. `freq` sets the tom's tuning (low vs high tom).
+VOICES.tom = {
+  params: {
+    glideRatio:  { type: 'linear', min: 1.1, max: 2.0, default: 1.45 },
+    decayMs:     { type: 'log',    min: 120, max: 700, default: 300 },
+    overtone:    { type: 'linear', min: 0,   max: 0.6, default: 0.25 },
+    clickAmount: { type: 'linear', min: 0,   max: 0.6, default: 0.20 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const out = audioCtx.createGain();
+    const clip = softClip(audioCtx);
+    const preClip = audioCtx.createGain();
+    preClip.connect(clip); clip.connect(out);
+    const decay = (params.decayMs || 300) / 1000;
+    const glide = params.glideRatio != null ? params.glideRatio : 1.45;
+
+    // Body — pitched sine with a downward glide.
+    const body = audioCtx.createOscillator();
+    const bodyEnv = audioCtx.createGain();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(freq * glide, when);
+    body.frequency.exponentialRampToValueAtTime(freq, when + 0.08);
+    body.connect(bodyEnv); bodyEnv.connect(preClip);
+    bodyEnv.gain.setValueAtTime(0, when);
+    bodyEnv.gain.linearRampToValueAtTime(1.4, when + 0.003);
+    bodyEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay);
+    body.start(when);
+
+    // Overtone — a detuned partial for shell resonance.
+    const over = audioCtx.createOscillator();
+    const overEnv = audioCtx.createGain();
+    over.type = 'triangle';
+    over.frequency.setValueAtTime(freq * glide * 1.5, when);
+    over.frequency.exponentialRampToValueAtTime(freq * 1.5, when + 0.08);
+    over.connect(overEnv); overEnv.connect(preClip);
+    const overAmt = params.overtone != null ? params.overtone : 0.25;
+    overEnv.gain.setValueAtTime(0, when);
+    overEnv.gain.linearRampToValueAtTime(overAmt, when + 0.003);
+    overEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay * 0.6);
+    over.start(when);
+
+    // Stick attack — short bright noise tick.
+    const click = audioCtx.createBufferSource();
+    click.buffer = createNoiseBuffer(0.05);
+    const clickHpf = audioCtx.createBiquadFilter();
+    clickHpf.type = 'highpass'; clickHpf.frequency.value = 1800; clickHpf.Q.value = 0.7;
+    const clickEnv = audioCtx.createGain();
+    click.connect(clickHpf); clickHpf.connect(clickEnv); clickEnv.connect(preClip);
+    const clickAmt = params.clickAmount != null ? params.clickAmount : 0.20;
+    clickEnv.gain.setValueAtTime(0, when);
+    clickEnv.gain.linearRampToValueAtTime(clickAmt, when + 0.001);
+    clickEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.015);
+    click.start(when);
+
+    return {
+      output: out,
+      stop: (whenStop) => {
+        const t = Math.max(whenStop, when + decay + 0.05);
+        try { body.stop(t); } catch (e) {}
+        try { over.stop(t); } catch (e) {}
+        try { click.stop(t); } catch (e) {}
+      },
+      detune: null,
+    };
+  },
+};
+
+// === RIM (rim click / rimshot) ===
+// Very short, bright, woody. Two resonant high pulses (~1.7 kHz) give
+// the characteristic "tok", plus a brief bandpassed noise tick for the
+// stick contact. Almost no tail — it's a transient, not a tone.
+VOICES.rim = {
+  params: {
+    toneHz:    { type: 'log',    min: 800,  max: 2500, default: 1700 },
+    decayMs:   { type: 'log',    min: 15,   max: 80,   default: 32 },
+    noiseAmt:  { type: 'linear', min: 0,    max: 1,    default: 0.5 },
+  },
+  build: function(audioCtx, freq, when, params) {
+    const out = audioCtx.createGain();
+    const tone = params.toneHz || 1700;
+    const decay = (params.decayMs || 32) / 1000;
+
+    // Woody pulse — a triangle blip with fast decay.
+    const osc = audioCtx.createOscillator();
+    const oscEnv = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = tone;
+    osc.connect(oscEnv); oscEnv.connect(out);
+    oscEnv.gain.setValueAtTime(0, when);
+    oscEnv.gain.linearRampToValueAtTime(0.7, when + 0.0006);
+    oscEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay);
+    osc.start(when);
+
+    // Stick tick — short bandpassed noise around the tone.
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = createNoiseBuffer(0.05);
+    const bpf = audioCtx.createBiquadFilter();
+    bpf.type = 'bandpass'; bpf.frequency.value = tone * 1.2; bpf.Q.value = 1.2;
+    const nEnv = audioCtx.createGain();
+    noise.connect(bpf); bpf.connect(nEnv); nEnv.connect(out);
+    const nAmt = params.noiseAmt != null ? params.noiseAmt : 0.5;
+    nEnv.gain.setValueAtTime(0, when);
+    nEnv.gain.linearRampToValueAtTime(nAmt, when + 0.0005);
+    nEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay * 0.7);
+    noise.start(when);
+
+    return {
+      output: out,
+      stop: (whenStop) => {
+        const t = Math.max(whenStop, when + decay + 0.04);
+        try { osc.stop(t); } catch (e) {}
+        try { noise.stop(t); } catch (e) {}
+      },
+      detune: null,
+    };
+  },
+};
+
 // playPatch — single dispatcher for all note-making in murmur. Builds
 // every voice in `patch.layers` in parallel, sums them through a shared
 // envelope, hands the result to the routing function. Returns a handle
