@@ -19,64 +19,92 @@ let snapAutoTimer = null;
 let liveNoteOffFn = () => {};
 export function setLiveNoteOffFn(fn) { liveNoteOffFn = fn; }
 
+// === Seed serialisation manifest ===
+//
+// Every persistent seed property is declared ONCE here. serializeSeed
+// and deserializeSeed both iterate these lists, so adding a new seed
+// field can't silently vanish on undo — the old code enumerated every
+// field by hand in two places and they had already drifted (top-level
+// pattern lost tOffset/drumSlot on restore; `muted` was never saved).
+//
+// SCALAR_FIELDS round-trip verbatim. Structured fields (arrays, Sets,
+// patterns, the patch graph) get their own clone helpers below.
+// RUNTIME_RESET fields are never serialised — they're rebuilt fresh on
+// restore (scheduler cursors, physics velocity, audio node handles).
+const SCALAR_FIELDS = [
+  'id', 'kind', 'modifierKind', 'cx', 'cy', 'r', 'color', 'fundamental',
+  'decay', 'decayFrac', 'intervalMs', 'intervalFrac', 'attackMs', 'attackFrac',
+  'delayMs', 'delayFrac', 'gain', 'label', 'quantize', 'loop', 'wanderlust',
+  'muted', 'sphereR', 'edgeIntensity', 'centerIntensity', 'falloffCurve',
+  'driveAmount', 'gainAmount', 'squashAmount', 'wobbleRate', 'wobbleDepth',
+  'crushBits', 'crushRate', 'reverbSec', 'role', 'swing', 'synthesisModel',
+  'polyFactor', 'patternBankIdx',
+];
+const RUNTIME_RESET = {
+  patternIdx: 0, currentStep: -1, nextTrigger: 0, lastPulseAt: 0,
+  vx: 0, vy: 0, delayInput: null, delayNode: null,
+};
+
+function clonePattern(steps) {
+  return steps.map(p => {
+    const c = { offset: p.offset, velocity: p.velocity, duration: p.duration, tOffset: p.tOffset };
+    if (p.drumSlot !== undefined) c.drumSlot = p.drumSlot;
+    if (p.extras && p.extras.length) {
+      c.extras = p.extras.map(e => {
+        const ec = { offset: e.offset, velocity: e.velocity, duration: e.duration };
+        if (e.drumSlot !== undefined) ec.drumSlot = e.drumSlot;
+        return ec;
+      });
+    }
+    return c;
+  });
+}
+function cloneBank(bank) {
+  return bank.map(b => ({ id: b.id, weight: b.weight, steps: clonePattern(b.steps) }));
+}
+
+function serializeSeed(s) {
+  const out = {};
+  for (const f of SCALAR_FIELDS) out[f] = s[f];
+  out.harmonics = s.harmonics ? s.harmonics.slice() : undefined;
+  out.blobPhases = s.blobPhases ? s.blobPhases.slice() : undefined;
+  out.pattern = s.pattern ? clonePattern(s.pattern) : undefined;
+  out.patternBank = s.patternBank ? cloneBank(s.patternBank) : undefined;
+  out.capturedByIds = [...(s.capturedByIds || [])];
+  out.capturedSeedIds = [...(s.capturedSeedIds || [])];
+  out.patch = s.patch ? JSON.parse(JSON.stringify(s.patch)) : null;
+  return out;
+}
+
+function deserializeSeed(snap) {
+  const seed = { ...RUNTIME_RESET };
+  for (const f of SCALAR_FIELDS) seed[f] = snap[f];
+  seed.harmonics = snap.harmonics ? snap.harmonics.slice() : [];
+  seed.blobPhases = snap.blobPhases ? snap.blobPhases.slice() : undefined;
+  seed.pattern = snap.pattern ? clonePattern(snap.pattern) : [];
+  seed.capturedByIds = new Set(snap.capturedByIds || []);
+  seed.capturedSeedIds = new Set(snap.capturedSeedIds || []);
+  seed.patch = snap.patch ? JSON.parse(JSON.stringify(snap.patch)) : null;
+  // Pattern bank: rebuild from the snapshot, or (pre-bank snapshots /
+  // voices without one) wrap the pattern as a single-entry bank so the
+  // variation features have something to operate on.
+  if (snap.patternBank && snap.patternBank.length > 0) {
+    seed.patternBank = cloneBank(snap.patternBank);
+    seed.patternBankIdx = Math.min(snap.patternBankIdx || 0, seed.patternBank.length - 1);
+    seed.pattern = seed.patternBank[seed.patternBankIdx].steps;
+  } else if (seed.kind === 'voice') {
+    seed.patternBank = [{ id: 'orig', weight: 1, steps: seed.pattern }];
+    seed.patternBankIdx = 0;
+  }
+  return seed;
+}
+
 export function takeSnapshot(label, immediate = false) {
   clearTimeout(snapAutoTimer);
   const capture = () => {
     const snap = {
       label, ts: new Date(),
-      seeds: seeds.map(s => ({
-        id: s.id, kind: s.kind, modifierKind: s.modifierKind,
-        cx: s.cx, cy: s.cy, r: s.r, color: s.color,
-        fundamental: s.fundamental,
-        decay: s.decay, decayFrac: s.decayFrac,
-        intervalMs: s.intervalMs, intervalFrac: s.intervalFrac,
-        attackMs: s.attackMs, attackFrac: s.attackFrac,
-        delayMs: s.delayMs, delayFrac: s.delayFrac,
-        harmonics: s.harmonics.slice(), gain: s.gain, label: s.label,
-        pattern: s.pattern.map(p => ({
-          offset: p.offset, velocity: p.velocity,
-          duration: p.duration,
-          tOffset: p.tOffset,
-          extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
-        })),
-        // Pattern bank (#53) — variations the seed cycles through at
-        // each loop. Each entry stores its own deep-cloned steps so
-        // edits to one variant don't leak into others.
-        patternBank: s.patternBank ? s.patternBank.map(b => ({
-          id: b.id,
-          weight: b.weight,
-          steps: b.steps.map(p => ({
-            offset: p.offset, velocity: p.velocity,
-            duration: p.duration, tOffset: p.tOffset,
-            extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
-            drumSlot: p.drumSlot,
-          })),
-        })) : undefined,
-        patternBankIdx: s.patternBankIdx || 0,
-        quantize: s.quantize,
-        loop: s.loop,
-        wanderlust: s.wanderlust,
-        blobPhases: s.blobPhases ? s.blobPhases.slice() : undefined,
-        capturedByIds: [...(s.capturedByIds || [])],
-        capturedSeedIds: [...s.capturedSeedIds],
-        sphereR: s.sphereR,
-        edgeIntensity:   s.edgeIntensity,
-        centerIntensity: s.centerIntensity,
-        falloffCurve:    s.falloffCurve,
-        driveAmount: s.driveAmount,
-        gainAmount: s.gainAmount,
-        squashAmount: s.squashAmount,
-        wobbleRate: s.wobbleRate,
-        wobbleDepth: s.wobbleDepth,
-        crushBits: s.crushBits,
-        crushRate: s.crushRate,
-        reverbSec: s.reverbSec,
-        role: s.role,
-        swing: s.swing,
-        synthesisModel: s.synthesisModel,
-        polyFactor: s.polyFactor,
-        patch: s.patch ? JSON.parse(JSON.stringify(s.patch)) : null,
-      })),
+      seeds: seeds.map(serializeSeed),
       nextSeedId: state.nextSeedId,
     };
     snapshots.push(snap);
@@ -110,39 +138,7 @@ export function revertToSnapshot(i) {
   if (!snap) return;
   seeds.length = 0;
   for (const s of snap.seeds) {
-    const newSeed = {
-      ...s,
-      harmonics: s.harmonics.slice(),
-      pattern: s.pattern.map(p => ({
-          offset: p.offset, velocity: p.velocity,
-          duration: p.duration,
-          extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
-        })),
-      capturedByIds: new Set(s.capturedByIds || []),
-      capturedSeedIds: new Set(s.capturedSeedIds || []),
-      patternIdx: 0, currentStep: -1, nextTrigger: 0, lastPulseAt: 0,
-      delayInput: null, delayNode: null,
-    };
-    // Rebuild patternBank if the snapshot has one; otherwise wrap the
-    // freshly-cloned pattern as a single-entry bank so future variant
-    // adds work without a separate init pass.
-    if (s.patternBank && s.patternBank.length > 0) {
-      newSeed.patternBank = s.patternBank.map(b => ({
-        id: b.id || Math.random().toString(36).slice(2, 8),
-        weight: b.weight != null ? b.weight : 1,
-        steps: b.steps.map(p => ({
-          offset: p.offset, velocity: p.velocity,
-          duration: p.duration, tOffset: p.tOffset,
-          extras: p.extras ? p.extras.map(e => ({ offset: e.offset, velocity: e.velocity, duration: e.duration })) : undefined,
-          drumSlot: p.drumSlot,
-        })),
-      }));
-      newSeed.patternBankIdx = Math.min(s.patternBankIdx || 0, newSeed.patternBank.length - 1);
-      newSeed.pattern = newSeed.patternBank[newSeed.patternBankIdx].steps;
-    } else if (newSeed.kind === 'voice') {
-      newSeed.patternBank = [{ id: 'orig', weight: 1, steps: newSeed.pattern }];
-      newSeed.patternBankIdx = 0;
-    }
+    const newSeed = deserializeSeed(s);
     seeds.push(newSeed);
     setupAuraChain(newSeed);
   }
