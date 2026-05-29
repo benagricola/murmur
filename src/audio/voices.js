@@ -545,70 +545,70 @@ VOICES.clap = {
 };
 
 // === TOM ===
-// A pitched membrane: a sine body that glides DOWN in pitch over the
-// first ~80 ms (the head tensioning) and rings for a few hundred ms,
-// plus a faint detuned overtone for shell character and a soft stick
-// transient up top. Less click than a kick, no deep sub — clearly
-// pitched. `freq` sets the tom's tuning (low vs high tom).
+// A pitched membrane — and deliberately NOT a tuned kick. The kick is a
+// big octave+ pitch drop into a sub thump with no tonal ring; a tom is
+// the opposite: a SMALL pitch bend (a head bends a semitone or two, not
+// an octave) over a clear, sustained pitch whose colour comes from
+// INHARMONIC membrane modes (a circular drumhead resonates at ~1.59x,
+// 2.14x, 2.30x the fundamental — not clean musical intervals). That
+// woody, slightly-detuned ring is what separates a tom from "a higher
+// kick". No sub layer, gentle attack. `freq` sets the tuning.
+const TOM_MODES = [1.0, 1.59, 2.14, 2.30];   // circular-membrane mode ratios
+const TOM_MODE_GAINS = [1.0, 0.30, 0.16, 0.09];
+const TOM_MODE_DECAY = [1.0, 0.55, 0.40, 0.30];   // higher modes ring shorter
 VOICES.tom = {
   params: {
-    glideRatio:  { type: 'linear', min: 1.1, max: 2.0, default: 1.45 },
-    decayMs:     { type: 'log',    min: 120, max: 700, default: 300 },
-    overtone:    { type: 'linear', min: 0,   max: 0.6, default: 0.25 },
-    clickAmount: { type: 'linear', min: 0,   max: 0.6, default: 0.20 },
+    glideRatio:  { type: 'linear', min: 1.0, max: 1.4, default: 1.18 },
+    decayMs:     { type: 'log',    min: 120, max: 700, default: 320 },
+    clickAmount: { type: 'linear', min: 0,   max: 0.6, default: 0.16 },
   },
   build: function(audioCtx, freq, when, params) {
     const out = audioCtx.createGain();
     const clip = softClip(audioCtx);
     const preClip = audioCtx.createGain();
     preClip.connect(clip); clip.connect(out);
-    const decay = (params.decayMs || 300) / 1000;
-    const glide = params.glideRatio != null ? params.glideRatio : 1.45;
+    const decay = (params.decayMs || 320) / 1000;
+    const glide = params.glideRatio != null ? params.glideRatio : 1.18;
 
-    // Body — pitched sine with a downward glide.
-    const body = audioCtx.createOscillator();
-    const bodyEnv = audioCtx.createGain();
-    body.type = 'sine';
-    body.frequency.setValueAtTime(freq * glide, when);
-    body.frequency.exponentialRampToValueAtTime(freq, when + 0.08);
-    body.connect(bodyEnv); bodyEnv.connect(preClip);
-    bodyEnv.gain.setValueAtTime(0, when);
-    bodyEnv.gain.linearRampToValueAtTime(1.4, when + 0.003);
-    bodyEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay);
-    body.start(when);
+    // Stack the membrane modes. Each is a sine at an inharmonic ratio,
+    // sharing the same gentle downward glide, with progressively
+    // shorter decays so the sound darkens as it rings — exactly how a
+    // real tom's overtones die away faster than its fundamental.
+    const oscs = [];
+    for (let i = 0; i < TOM_MODES.length; i++) {
+      const osc = audioCtx.createOscillator();
+      const env = audioCtx.createGain();
+      osc.type = 'sine';
+      const ratio = TOM_MODES[i];
+      osc.frequency.setValueAtTime(freq * ratio * glide, when);
+      osc.frequency.exponentialRampToValueAtTime(freq * ratio, when + 0.06);
+      osc.connect(env); env.connect(preClip);
+      env.gain.setValueAtTime(0, when);
+      env.gain.linearRampToValueAtTime(1.3 * TOM_MODE_GAINS[i], when + 0.003);
+      env.gain.exponentialRampToValueAtTime(0.0008, when + decay * TOM_MODE_DECAY[i]);
+      osc.start(when);
+      oscs.push(osc);
+    }
 
-    // Overtone — a detuned partial for shell resonance.
-    const over = audioCtx.createOscillator();
-    const overEnv = audioCtx.createGain();
-    over.type = 'triangle';
-    over.frequency.setValueAtTime(freq * glide * 1.5, when);
-    over.frequency.exponentialRampToValueAtTime(freq * 1.5, when + 0.08);
-    over.connect(overEnv); overEnv.connect(preClip);
-    const overAmt = params.overtone != null ? params.overtone : 0.25;
-    overEnv.gain.setValueAtTime(0, when);
-    overEnv.gain.linearRampToValueAtTime(overAmt, when + 0.003);
-    overEnv.gain.exponentialRampToValueAtTime(0.0008, when + decay * 0.6);
-    over.start(when);
-
-    // Stick attack — short bright noise tick.
+    // Soft stick contact — quieter and lower than a kick's click so the
+    // attack reads as a mallet on a head, not a beater on a port.
     const click = audioCtx.createBufferSource();
     click.buffer = createNoiseBuffer(0.05);
-    const clickHpf = audioCtx.createBiquadFilter();
-    clickHpf.type = 'highpass'; clickHpf.frequency.value = 1800; clickHpf.Q.value = 0.7;
+    const clickBpf = audioCtx.createBiquadFilter();
+    clickBpf.type = 'bandpass'; clickBpf.frequency.value = 1200; clickBpf.Q.value = 0.6;
     const clickEnv = audioCtx.createGain();
-    click.connect(clickHpf); clickHpf.connect(clickEnv); clickEnv.connect(preClip);
-    const clickAmt = params.clickAmount != null ? params.clickAmount : 0.20;
+    click.connect(clickBpf); clickBpf.connect(clickEnv); clickEnv.connect(preClip);
+    const clickAmt = params.clickAmount != null ? params.clickAmount : 0.16;
     clickEnv.gain.setValueAtTime(0, when);
     clickEnv.gain.linearRampToValueAtTime(clickAmt, when + 0.001);
-    clickEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.015);
+    clickEnv.gain.exponentialRampToValueAtTime(0.0008, when + 0.018);
     click.start(when);
 
     return {
       output: out,
       stop: (whenStop) => {
         const t = Math.max(whenStop, when + decay + 0.05);
-        try { body.stop(t); } catch (e) {}
-        try { over.stop(t); } catch (e) {}
+        for (const o of oscs) { try { o.stop(t); } catch (e) {} }
         try { click.stop(t); } catch (e) {}
       },
       detune: null,
