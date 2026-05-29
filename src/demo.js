@@ -28,8 +28,6 @@ import { setBPM } from './transport.js';
 import { makeSeed, syncRenderedSeeds } from './seeds.js';
 import { takeSnapshot } from './snapshots.js';
 import { settlePhysics } from './scheduler.js';
-import { tryCreateContext } from './audio/context.js';
-import { setupMIDI } from './input.js';
 import { TIMBRE_ROLES } from './timbres.js';
 import { seeds, activeEvents, activeLiveNotes, state } from './state.js';
 import { inspectorEl } from './inspector.js';
@@ -460,35 +458,30 @@ export function rollDemo(styleName) {
   return planted;
 }
 
-// First-load composition: pick a random style so reloads feel fresh.
-rollDemo();
+// Wire the demo button, keyboard toggle, and DevTools handle. Called
+// once from main.js's explicit boot sequence — these used to run as
+// import-time side effects at the bottom of this file, which hid the
+// real startup order. The active boot steps (plant the first demo,
+// create the AudioContext, request MIDI) now live in main.js too.
+export function wireDemoControls() {
+  const demoBtn = document.getElementById('demo-btn');
+  if (demoBtn) demoBtn.addEventListener('click', () => rollDemo());
 
-// Try to create the AudioContext now (it'll be suspended until a user
-// gesture but having it exist avoids hangs in resume() later).
-tryCreateContext();
-setupMIDI();
+  // On-screen keyboard toggle — hides / shows the piano-bar. Useful on
+  // smaller screens or when driving murmur entirely from a MIDI device.
+  const kbdBtn = document.getElementById('kbd-btn');
+  const pianoBar = document.querySelector('.piano-bar');
+  if (kbdBtn && pianoBar) {
+    const KEY = 'murmur.keyboardHidden';   // remember across reloads
+    if (localStorage.getItem(KEY) === '1') pianoBar.classList.add('hidden');
+    kbdBtn.classList.toggle('on', !pianoBar.classList.contains('hidden'));
+    kbdBtn.addEventListener('click', () => {
+      pianoBar.classList.toggle('hidden');
+      const hidden = pianoBar.classList.contains('hidden');
+      kbdBtn.classList.toggle('on', !hidden);
+      try { localStorage.setItem(KEY, hidden ? '1' : '0'); } catch (e) {}
+    });
+  }
 
-// Top-bar demo button. (Created in index.html.)
-const demoBtn = document.getElementById('demo-btn');
-if (demoBtn) demoBtn.addEventListener('click', () => rollDemo());
-
-// On-screen keyboard toggle — hides / shows the piano-bar at the
-// bottom. Useful on smaller screens or when the user is exclusively
-// driving murmur via their MIDI device.
-const kbdBtn = document.getElementById('kbd-btn');
-const pianoBar = document.querySelector('.piano-bar');
-if (kbdBtn && pianoBar) {
-  // Remember the user's preference across reloads.
-  const KEY = 'murmur.keyboardHidden';
-  if (localStorage.getItem(KEY) === '1') pianoBar.classList.add('hidden');
-  kbdBtn.classList.toggle('on', !pianoBar.classList.contains('hidden'));
-  kbdBtn.addEventListener('click', () => {
-    pianoBar.classList.toggle('hidden');
-    const hidden = pianoBar.classList.contains('hidden');
-    kbdBtn.classList.toggle('on', !hidden);
-    try { localStorage.setItem(KEY, hidden ? '1' : '0'); } catch (e) {}
-  });
+  window.murmurRollDemo = rollDemo;   // DevTools: murmurRollDemo('dnb')
 }
-
-// DevTools handle so the user can call murmurRollDemo('dnb') etc.
-window.murmurRollDemo = rollDemo;
