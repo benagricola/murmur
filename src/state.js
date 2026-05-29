@@ -3,6 +3,29 @@
 // importers can both read and write them — ES module `let` exports are
 // read-only from outside the owning module, but object properties have
 // no such restriction.
+//
+// Because any module CAN write any field, the contract is by
+// convention. To keep that legible, here is the writer-of-record for
+// each `state` field (everyone else should treat it as read-only — a
+// write from a module not listed is a smell worth questioning):
+//
+//   nextSeedId        seeds.js (++ on create), snapshots.js (restore)
+//   nextEventId       audio/events.js (++ on spawn)
+//   selectedSeedId    inspector.js owns selection; snapshots/demo clear
+//                     it on revert/wipe; controls/scheduler/seeds read-
+//                     mostly + clear on delete. The one genuinely
+//                     shared-write field — change with care.
+//   plantMode         pointer.js (palette), output/minilab3.js (pads)
+//   guardrails        transport.js (toggle)
+//   isRecording       recording.js
+//   recordingBuffer   recording.js + input.js (note capture)
+//   isPlaying         transport.js
+//   playbackStartTime transport.js (play), scheduler.js (re-anchor)
+//   pitchBendCents    input.js
+//   sustainPedalDown  input.js
+//   sweepDrag         pointer.js
+//   bloomSettings     bloom-wind-config.js (read by audio/events.js)
+//   windSettings      bloom-wind-config.js (read by audio/events.js)
 
 export const seeds = [];
 export const activeEvents = [];
