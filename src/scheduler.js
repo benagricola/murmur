@@ -24,7 +24,7 @@ import { seeds, activeEvents, state, seedById } from './state.js';
 import { BAR_MS } from './tempo.js';
 import {
   SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
-  updateSphereTransforms, auraIntensityForSeed, auraSpatialIntensityAt,
+  updateSphereTransforms, auraIntensityForSeed, renderRunnerTendrils,
 } from './seeds.js';
 import { auraGainDefault } from './auras/registry.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
@@ -536,44 +536,53 @@ function updateAuraModulation() {
   }
 }
 
-// Tide (LFO) modulation. Each tide aura oscillates 0..1 over its period
-// (in bars, phase-locked to playbackStartTime so peaks land on bars).
-// For every OTHER aura, we sum the tides covering it: an aura's `_lfoMod`
-// swings between (1 - coupling) and 1, where coupling is the tide's
-// spatial intensity at the aura's centre (so its edge/centre sliders are
-// the modulation depth). _lfoMod then scales that aura's effective
+// Runner (LFO) modulation. Each runner oscillates 0..1 over its period
+// (in bars, phase-locked to playbackStartTime so peaks land on the
+// beat). Unlike a field aura it only affects the seeds/auras it's
+// explicitly LINKED to: for each link we scale the target aura's
+// `_lfoMod` between (1 - amplitude) and 1, where amplitude is the
+// runner's centreIntensity. `_lfoMod` then scales that aura's effective
 // intensity everywhere (auraIntensityAt), pulsing its drive/boost/send/
-// poly strength. Tides are sources, not targets — their own _lfoMod
-// stays 1; we stash _lfoVal on them for the visual breathing.
-function updateLfoModulation(now) {
-  const tides = [];
+// poly strength. Runners are sources, not targets — their own _lfoMod
+// stays 1; we stash _lfoVal for the tendril breathing.
+function updateRunnerModulation(now) {
+  const runners = [];
   for (const m of seeds) {
-    if (m.kind === 'modifier' && m.modifierKind === 'lfo' && m.sphereR) tides.push(m);
+    if (m.kind === 'modifier' && m.modifierKind === 'runner') runners.push(m);
   }
   const t = now - (state.playbackStartTime || 0);
-  for (const L of tides) {
-    const periodSec = Math.max(0.05, (L.lfoBars || 2) * BAR_MS / 1000);
-    L._lfoVal = 0.5 + 0.5 * Math.sin((t / periodSec) * Math.PI * 2);
-    L._lfoMod = 1;
+  for (const R of runners) {
+    const periodSec = Math.max(0.05, (R.lfoBars || 2) * BAR_MS / 1000);
+    const ph = (t / periodSec) % 1;
+    R._lfoPhase = ph < 0 ? ph + 1 : ph;             // 0..1 for the tendril animation
+    R._lfoVal = 0.5 + 0.5 * Math.sin((t / periodSec) * Math.PI * 2);
+    R._lfoMod = 1;
   }
+  // Reset every other aura's _lfoMod, then apply each runner's links.
   for (const m of seeds) {
-    if (m.kind !== 'modifier' || m.modifierKind === 'lfo') continue;
-    if (tides.length === 0) { m._lfoMod = 1; continue; }
-    let mod = 1;
-    for (const L of tides) {
-      const coupling = auraSpatialIntensityAt(L, m.cx, m.cy);
-      if (coupling < 0.01) continue;
-      mod *= 1 - coupling * (1 - L._lfoVal);
+    if (m.kind !== 'modifier' || m.modifierKind === 'runner') continue;
+    m._lfoMod = 1;
+  }
+  for (const R of runners) {
+    const amp = R.centerIntensity != null ? R.centerIntensity : 1;   // modulation depth
+    for (const link of (R.links || [])) {
+      const target = seedById(link.targetId);
+      if (!target) continue;
+      // Stage 1: the 'strength' destination on an aura target. (Seed
+      // targets + named-param destinations land in Stage 2.)
+      if (target.kind === 'modifier' && (link.dest || 'strength') === 'strength') {
+        target._lfoMod *= 1 - amp * (1 - R._lfoVal);
+      }
     }
-    m._lfoMod = mod;
   }
 }
 
 function visualTick() {
   const now = audioCtx ? audioCtx.currentTime : 0;
   physicsStep();
-  updateLfoModulation(now);
-  updateSphereTransforms();   // every frame so the tide's breathing shows
+  updateRunnerModulation(now);
+  updateSphereTransforms();   // every frame so modulated auras breathe
+  renderRunnerTendrils();
   updateAuraModulation();
   // Aura-tooltip live refresh — short-circuits inside the module
   // when nothing is hovered.

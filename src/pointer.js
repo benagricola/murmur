@@ -13,7 +13,7 @@ import {
 } from './timbres.js';
 import { state, seeds, seedById } from './state.js';
 import {
-  canvasEl, canvasWrap, SVGNS,
+  canvasEl, canvasWrap, SVGNS, tethersLayer,
   makeSeed, syncRenderedSeeds, renderSeed, renderSpheres, renderTethers,
 } from './seeds.js';
 import { setupAuraChain, auraEntry, auraHarmonics, auraBaseR } from './auras/registry.js';
@@ -126,6 +126,15 @@ function beginDrag(evt, seedId) {
   const seed = seedById(seedId);
   if (!seed) return;
   const c = canvasCoords(evt);
+  // A SELECTED runner starts a connect-drag (draw a tendril) instead of
+  // a move. Dropping on an aura links/unlinks it (snap); dropping on
+  // empty canvas moves the runner there. Tap a runner once to select,
+  // then drag from it to connect.
+  if (seed.modifierKind === 'runner' && state.selectedSeedId === seedId) {
+    connectDrag = { runner: seed, x: c.x, y: c.y, startX: c.x, startY: c.y, target: null, moved: false };
+    updateConnectPreview();
+    return;
+  }
   drag = {
     seed, offsetX: c.x - seed.cx, offsetY: c.y - seed.cy, moved: false,
     // Recent-velocity tracking for release inertia. We keep a 3-frame
@@ -233,6 +242,76 @@ function endDrag() {
   }
 }
 
+// === Runner connect-drag ===
+let connectDrag = null;
+let connectPreviewEl = null;
+
+// Nearest aura (modifier, not a runner) under the cursor, within a
+// forgiving snap radius — the link target. Stage 1 targets auras only;
+// seed targets arrive in Stage 2.
+function snapTargetAt(c, excludeId) {
+  let best = null, bestDist = Infinity;
+  for (const s of seeds) {
+    if (s.id === excludeId) continue;
+    if (s.kind !== 'modifier' || s.modifierKind === 'runner') continue;
+    const d = Math.hypot(c.x - s.cx, c.y - s.cy);
+    if (d <= (s.r || 30) * 2.4 && d < bestDist) { bestDist = d; best = s; }
+  }
+  return best;
+}
+
+function continueConnectDrag(evt) {
+  if (!connectDrag) return;
+  const c = canvasCoords(evt);
+  connectDrag.x = c.x; connectDrag.y = c.y;
+  if (Math.hypot(c.x - connectDrag.startX, c.y - connectDrag.startY) > 4) connectDrag.moved = true;
+  connectDrag.target = snapTargetAt(c, connectDrag.runner.id);
+  updateConnectPreview();
+}
+
+function updateConnectPreview() {
+  if (!connectDrag) {
+    if (connectPreviewEl) { connectPreviewEl.remove(); connectPreviewEl = null; }
+    return;
+  }
+  if (!connectPreviewEl) {
+    connectPreviewEl = document.createElementNS(SVGNS, 'path');
+    connectPreviewEl.setAttribute('fill', 'none');
+    connectPreviewEl.setAttribute('stroke', connectDrag.runner.color);
+    connectPreviewEl.setAttribute('stroke-width', '2');
+    connectPreviewEl.setAttribute('stroke-dasharray', '5 5');
+    connectPreviewEl.setAttribute('pointer-events', 'none');
+    tethersLayer.appendChild(connectPreviewEl);
+  }
+  const r = connectDrag.runner;
+  const tx = connectDrag.target ? connectDrag.target.cx : connectDrag.x;
+  const ty = connectDrag.target ? connectDrag.target.cy : connectDrag.y;
+  connectPreviewEl.setAttribute('d', `M ${r.cx} ${r.cy} L ${tx} ${ty}`);
+  connectPreviewEl.setAttribute('stroke-opacity', connectDrag.target ? '0.95' : '0.4');
+}
+
+function endConnectDrag() {
+  if (!connectDrag) return;
+  const r = connectDrag.runner;
+  if (connectDrag.target) {
+    // Toggle the link: drag onto a linked aura to remove it.
+    if (!r.links) r.links = [];
+    const i = r.links.findIndex(l => l.targetId === connectDrag.target.id);
+    if (i >= 0) { r.links.splice(i, 1); takeSnapshot('unlinked ' + labelFor(connectDrag.target.modifierKind)); }
+    else { r.links.push({ targetId: connectDrag.target.id, dest: 'strength', amount: 1 }); takeSnapshot('linked ' + labelFor(connectDrag.target.modifierKind)); }
+    selectSeed(r.id);   // refresh the inspector link list
+  } else if (connectDrag.moved) {
+    // Dropped on empty canvas after moving → reposition the runner.
+    const margin = 8 + (r.r || 0);
+    r.cx = Math.max(margin, Math.min(1400 - margin, connectDrag.x));
+    r.cy = Math.max(margin, Math.min(800 - margin, connectDrag.y));
+    renderSeed(r);
+    takeSnapshot('moved ' + r.label);
+  }
+  connectDrag = null;
+  updateConnectPreview();
+}
+
 function continueSweepDrag(evt) {
   if (!state.sweepDrag) return;
   const c = canvasCoords(evt);
@@ -248,8 +327,10 @@ function endSweepDrag() {
 }
 
 window.addEventListener('pointermove', continueDrag);
+window.addEventListener('pointermove', continueConnectDrag);
 window.addEventListener('pointermove', continueSweepDrag);
 window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointerup', endConnectDrag);
 window.addEventListener('pointerup', endSweepDrag);
 
 // === Plant-mode chip strip ===

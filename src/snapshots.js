@@ -72,6 +72,7 @@ function serializeSeed(s) {
   out.patternBank = s.patternBank ? cloneBank(s.patternBank) : undefined;
   out.capturedByIds = [...(s.capturedByIds || [])];
   out.capturedSeedIds = [...(s.capturedSeedIds || [])];
+  out.links = s.links ? s.links.map(l => ({ ...l })) : undefined;   // runner tendrils
   out.patch = s.patch ? JSON.parse(JSON.stringify(s.patch)) : null;
   return out;
 }

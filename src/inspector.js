@@ -259,49 +259,58 @@ export function selectSeed(id) {
   const falloffRow = document.getElementById('falloff-row');
   const edgeRow = document.getElementById('edge-intensity-row');
   const centerRow = document.getElementById('center-intensity-row');
+  const runnerLinksRow = document.getElementById('runner-links-row');
+  const isRunner = seed.kind === 'modifier' && seed.modifierKind === 'runner';
   if (seed.kind === 'modifier') {
-    sphereRow.style.display = '';
-    falloffRow.style.display = '';
-    edgeRow.style.display = '';
+    // A runner has no spatial field — hide reach/falloff/edge; its
+    // centre slider doubles as the modulation amplitude.
+    sphereRow.style.display = isRunner ? 'none' : '';
+    falloffRow.style.display = isRunner ? 'none' : '';
+    edgeRow.style.display = isRunner ? 'none' : '';
     centerRow.style.display = '';
-    buildPicker(
-      document.getElementById('sphere-picker'),
-      SPHERE_OPTIONS,
-      (opt) => {
-        seed.sphereR = opt.r;
-        reevaluateAllCapturesFn();
-        syncRenderedSeeds();
-        takeSnapshotFn('tweaked reach');
-      },
-      () => nearestOptionIdx(SPHERE_OPTIONS.map(o => ({ms: o.r})), seed.sphereR)
-    );
-    // Falloff curve picker — how the aura's intensity shapes from
-    // edgeIntensity at the boundary to centerIntensity at the centre.
-    const curveOpts = AURA_CURVE_KEYS.map(k => ({ label: k, key: k }));
-    buildPicker(
-      document.getElementById('falloff-picker'),
-      curveOpts,
-      (opt) => {
-        seed.falloffCurve = opt.key;
-        syncRenderedSeeds();
-        takeSnapshotFn('falloff: ' + opt.label);
-      },
-      () => Math.max(0, AURA_CURVE_KEYS.indexOf(seed.falloffCurve || 'linear'))
-    );
-    // Edge + centre intensity sliders.
-    const edgeSlider = document.getElementById('edge-intensity-slider');
-    const edgeVal = document.getElementById('edge-intensity-val');
-    const eI = Math.round((seed.edgeIntensity != null ? seed.edgeIntensity : 0) * 100);
-    edgeSlider.value = eI; edgeVal.textContent = eI + '%';
+    document.getElementById('center-intensity-label').textContent = isRunner ? 'amplitude' : 'centre';
+    if (!isRunner) {
+      buildPicker(
+        document.getElementById('sphere-picker'),
+        SPHERE_OPTIONS,
+        (opt) => {
+          seed.sphereR = opt.r;
+          reevaluateAllCapturesFn();
+          syncRenderedSeeds();
+          takeSnapshotFn('tweaked reach');
+        },
+        () => nearestOptionIdx(SPHERE_OPTIONS.map(o => ({ms: o.r})), seed.sphereR)
+      );
+      const curveOpts = AURA_CURVE_KEYS.map(k => ({ label: k, key: k }));
+      buildPicker(
+        document.getElementById('falloff-picker'),
+        curveOpts,
+        (opt) => {
+          seed.falloffCurve = opt.key;
+          syncRenderedSeeds();
+          takeSnapshotFn('falloff: ' + opt.label);
+        },
+        () => Math.max(0, AURA_CURVE_KEYS.indexOf(seed.falloffCurve || 'linear'))
+      );
+      const edgeSlider = document.getElementById('edge-intensity-slider');
+      const edgeVal = document.getElementById('edge-intensity-val');
+      const eI = Math.round((seed.edgeIntensity != null ? seed.edgeIntensity : 0) * 100);
+      edgeSlider.value = eI; edgeVal.textContent = eI + '%';
+    }
     const centerSlider = document.getElementById('center-intensity-slider');
     const centerVal = document.getElementById('center-intensity-val');
     const cI = Math.round((seed.centerIntensity != null ? seed.centerIntensity : 1) * 100);
     centerSlider.value = cI; centerVal.textContent = cI + '%';
+    if (runnerLinksRow) {
+      runnerLinksRow.style.display = isRunner ? '' : 'none';
+      if (isRunner) renderRunnerLinks(seed);
+    }
   } else {
     sphereRow.style.display = 'none';
     falloffRow.style.display = 'none';
     edgeRow.style.display = 'none';
     centerRow.style.display = 'none';
+    if (runnerLinksRow) runnerLinksRow.style.display = 'none';
   }
   const capInfo = document.getElementById('captured-info');
   if (seed.kind === 'voice' && seed.capturedByIds && seed.capturedByIds.size > 0) {
@@ -328,6 +337,38 @@ function updatePatternLoopInfo(seed) {
   document.getElementById('pattern-loop-info').textContent =
     ((seed.pattern.length * seed.intervalMs) / 1000).toFixed(1) + 's loop';
   updateVariationInfo(seed);
+}
+
+// Runner inspector: list each tendril (target + destination) with a
+// remove button. Stage 1 destination is always 'strength' on an aura.
+function renderRunnerLinks(runner) {
+  const list = document.getElementById('runner-links-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const links = runner.links || [];
+  if (links.length === 0) {
+    list.innerHTML = '<div class="runner-link-empty">no tendrils yet — drag from this runner onto an aura</div>';
+    return;
+  }
+  links.forEach((link, i) => {
+    const t = seedById(link.targetId);
+    const row = document.createElement('div');
+    row.className = 'runner-link-row';
+    const name = t ? `${labelFor(t.modifierKind)} · ${link.dest || 'strength'}` : '(removed)';
+    row.innerHTML = `<span class="dot" style="background:${t ? t.color : '#666'}"></span>` +
+      `<span class="name">${escapeHtml(name)}</span>`;
+    const rm = document.createElement('button');
+    rm.className = 'runner-link-remove';
+    rm.textContent = '×';
+    rm.title = 'remove this tendril';
+    rm.addEventListener('click', () => {
+      runner.links.splice(i, 1);
+      renderRunnerLinks(runner);
+      takeSnapshotFn('unlinked runner');
+    });
+    row.appendChild(rm);
+    list.appendChild(row);
+  });
 }
 
 function updateVariationInfo(seed) {

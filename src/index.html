@@ -63,7 +63,7 @@
       <div class="plant-opt" data-kind="wobble"><span class="dot"></span>wobble</div>
       <div class="plant-opt" data-kind="crush"><span class="dot"></span>crush</div>
       <div class="plant-opt" data-kind="shift"><span class="dot"></span>shift</div>
-      <div class="plant-opt" data-kind="lfo"><span class="dot"></span>tide</div>
+      <div class="plant-opt" data-kind="runner"><span class="dot"></span>runner</div>
       <div class="tool-heading">Blooms</div>
       <div class="plant-opt event-opt" data-kind="drop"><span class="dot"></span>drop</div>
       <div class="plant-opt event-opt" data-kind="muffle"><span class="dot"></span>muffle</div>
@@ -232,9 +232,14 @@
     </div>
 
     <div class="pitch-row" id="center-intensity-row" style="display: none;">
-      <label>centre</label>
+      <label id="center-intensity-label">centre</label>
       <input type="range" class="std" id="center-intensity-slider" min="0" max="100" step="1" value="100">
       <span class="pitch-val" id="center-intensity-val">100%</span>
+    </div>
+
+    <div class="section" id="runner-links-row" style="display: none;">
+      <div class="section-label"><span>tendrils</span><span>drag from runner to link</span></div>
+      <div id="runner-links-list"></div>
     </div>
 
     <button class="btn delete-btn" id="delete-btn">remove this seed</button>

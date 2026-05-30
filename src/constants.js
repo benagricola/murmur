@@ -125,8 +125,9 @@ export const CRUSH_COLOR  = '#ff5577';
 // Shift aura: raises the per-loop probability that a seed in its
 // field switches to a different pattern variation (#53).
 export const SHIFT_COLOR  = '#ffac4d';
-// Tide (LFO) aura: oscillates the strength of other auras in reach.
-export const LFO_COLOR    = '#4de0c8';
+// Runner (LFO modulator): a node that sends tendrils to seeds/auras
+// and oscillates their strength / parameters over time.
+export const RUNNER_COLOR = '#4de0c8';
 
 // === Small generic helpers ===
 export function makeHarmonicsArr() { return new Array(12).fill(0); }

@@ -225,9 +225,11 @@ export function makeSeed(opts) {
     wobbleDepth:  opts.wobbleDepth  !== undefined ? opts.wobbleDepth  : 0.6,
     crushBits:    opts.crushBits    !== undefined ? opts.crushBits    : 5,
     crushRate:    opts.crushRate    !== undefined ? opts.crushRate    : 0.35,
-    // LFO / tide aura: oscillation period in bars; modulates the
-    // strength of other auras within reach (#: tide aura).
+    // Runner (LFO modulator): oscillation period in bars + the explicit
+    // links it drives. Each link = { targetId, dest, amount }; dest is
+    // 'strength' for an aura target (Stage 1). Amplitude = centerIntensity.
     lfoBars:      opts.lfoBars      !== undefined ? opts.lfoBars      : 2,
+    links:        opts.links ? opts.links.map(l => ({ ...l })) : [],
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
     attackFrac: attackMs / BAR_MS,
@@ -282,6 +284,8 @@ export function makeSeed(opts) {
 export function removeSeed(id) {
   const seed = seedById(id);
   if (!seed) return;
+  // Drop any runner tendrils pointing at this seed so they don't dangle.
+  pruneRunnerLinksTo(id);
   // Silence any in-flight audio from this seed immediately. Without
   // this, scheduled notes already in the Web Audio queue would play
   // out their full envelope after the seed is gone.
@@ -487,6 +491,7 @@ export function renderSpheres() {
   auraGroups.clear();
   for (const s of seeds) {
     if (s.kind !== 'modifier' || !s.sphereR) continue;
+    if (s.modifierKind === 'runner') continue;   // runners are nodes, not fields — no sphere
     const g = document.createElementNS(SVGNS, 'g');
     g.setAttribute('transform', `translate(${s.cx.toFixed(1)},${s.cy.toFixed(1)})`);
     g.dataset.seedId = s.id;
@@ -529,12 +534,11 @@ export function updateSphereTransforms() {
     const s = seedById(id);
     if (!s) continue;
     g.setAttribute('transform', `translate(${s.cx.toFixed(1)},${s.cy.toFixed(1)})`);
-    // Visual feedback for LFO/tide modulation: a tide's own field
-    // brightens + dims with its oscillator (_lfoVal); every aura a tide
-    // is squeezing fades with its _lfoMod, so you can SEE the breathing.
+    // Visual feedback for runner modulation: every aura a runner is
+    // squeezing fades with its _lfoMod, so you can SEE the breathing.
+    // (Runners have no sphere group, so they're never in this loop.)
     let op = 1;
-    if (s.modifierKind === 'lfo') op = 0.35 + 0.65 * (s._lfoVal != null ? s._lfoVal : 1);
-    else if (s._lfoMod != null) op = 0.25 + 0.75 * s._lfoMod;
+    if (s._lfoMod != null) op = 0.25 + 0.75 * s._lfoMod;
     g.setAttribute('opacity', op.toFixed(3));
   }
 }
@@ -617,7 +621,7 @@ export function renderTethers() {
     if (v.kind !== 'voice') continue;
     for (const m of seeds) {
       if (m.kind !== 'modifier') continue;
-      if (m.modifierKind === 'lfo') continue;   // tides modulate auras, not seeds
+      if (m.modifierKind === 'runner') continue;   // runners modulate via links, not capture
       const intensity = auraIntensityForSeed(m, v);
       if (intensity < 0.05) continue;
       const key = `${v.id}-${m.id}`;
@@ -630,6 +634,97 @@ export function renderTethers() {
     if (wantedKeys.has(key)) continue;
     cached.gNode.remove();
     tetherStreams.delete(key);
+  }
+}
+
+// === Runner tendrils ===
+// A runner (LFO modulator) draws a curved tendril to each seed/aura it
+// links to. Width + opacity breathe with the runner's oscillator value
+// so you can see the modulation pulsing along the connection. Cheap
+// enough to redraw every frame (runners + links are few).
+let runnerTendrilGroup = null;
+export function renderRunnerTendrils() {
+  if (!runnerTendrilGroup) {
+    runnerTendrilGroup = document.createElementNS(SVGNS, 'g');
+    runnerTendrilGroup.setAttribute('pointer-events', 'none');
+    tethersLayer.appendChild(runnerTendrilGroup);
+  }
+  runnerTendrilGroup.innerHTML = '';
+  for (const r of seeds) {
+    if (r.kind !== 'modifier' || r.modifierKind !== 'runner' || !r.links) continue;
+    const val = r._lfoVal != null ? r._lfoVal : 1;
+    const phase = r._lfoPhase != null ? r._lfoPhase : 0;
+    for (const link of r.links) {
+      const t = seedById(link.targetId);
+      if (!t) continue;
+      runnerTendrilGroup.insertAdjacentHTML('beforeend',
+        plasmaTendrilSvg(r.cx, r.cy, t.cx, t.cy, r.color, val, phase));
+    }
+  }
+}
+
+// Build the "plasma" tendril between two points: a glowing teal strand
+// that writhes at the runner's rate, two faint forks, and two white
+// control beads travelling along it (the "setting being passed" cue).
+// No SVG filter — the glow is a fat low-opacity underlay, which is far
+// cheaper to animate every frame.
+const TENDRIL_CORE = '#dffbf5';
+function plasmaTendrilSvg(ax, ay, bx, by, col, val, phase) {
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;     // along
+  const px = -uy, py = ux;                 // perpendicular
+  const amp = Math.min(len * 0.10, 26);
+  const N = 28;
+  const strand = (ampScale, phShift) => {
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      const env = Math.sin(Math.PI * s);
+      const off = env * amp * ampScale *
+        (0.6 * Math.sin(9 * s + phase * 6.2832 + phShift) + 0.4 * Math.sin(17 * s + 2 * phShift));
+      pts.push([ax + ux * len * s + px * off, ay + uy * len * s + py * off]);
+    }
+    return pts;
+  };
+  const dOf = (pts) => {
+    let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
+    return d;
+  };
+  const at = (pts, s) => {
+    s = ((s % 1) + 1) % 1;
+    const f = s * (pts.length - 1), i0 = Math.floor(f), fr = f - i0;
+    const a = pts[i0], b = pts[Math.min(i0 + 1, pts.length - 1)];
+    return [a[0] + (b[0] - a[0]) * fr, a[1] + (b[1] - a[1]) * fr];
+  };
+  const main = strand(1, 0);
+  const dMain = dOf(main);
+  let s = '';
+  // fat glow underlay
+  s += `<path d="${dMain}" fill="none" stroke="${col}" stroke-width="7" stroke-opacity="${(0.12 + 0.10 * val).toFixed(3)}" stroke-linecap="round"/>`;
+  // faint forks
+  for (const ph of [1.7, 3.4]) {
+    s += `<path d="${dOf(strand(1.4, ph))}" fill="none" stroke="${col}" stroke-width="1" stroke-opacity="${(0.22 + 0.18 * val).toFixed(3)}"/>`;
+  }
+  // bright core
+  s += `<path d="${dMain}" fill="none" stroke="${TENDRIL_CORE}" stroke-width="${(1.5 + 0.8 * val).toFixed(2)}" stroke-opacity="${(0.7 + 0.25 * val).toFixed(3)}" stroke-linecap="round"/>`;
+  // two travelling control beads
+  for (const off of [0, 0.5]) {
+    const [bxx, byy] = at(main, phase + off);
+    s += `<circle cx="${bxx.toFixed(1)}" cy="${byy.toFixed(1)}" r="${(9 + 3 * val).toFixed(1)}" fill="${col}" opacity="0.28"/>`;
+    s += `<circle cx="${bxx.toFixed(1)}" cy="${byy.toFixed(1)}" r="${(3.5 + 1.8 * val).toFixed(1)}" fill="#fff" opacity="0.92"/>`;
+  }
+  return s;
+}
+
+// Drop any runner links that point at a seed being removed, so a
+// deleted target doesn't leave a dangling tendril.
+export function pruneRunnerLinksTo(targetId) {
+  for (const r of seeds) {
+    if (r.modifierKind === 'runner' && r.links && r.links.length) {
+      r.links = r.links.filter(l => l.targetId !== targetId);
+    }
   }
 }
 

@@ -105,7 +105,7 @@
 .plant-opt[data-kind="wobble"] .dot { background: #c478ff; }
 .plant-opt[data-kind="crush"]  .dot { background: #ff5577; }
 .plant-opt[data-kind="shift"]  .dot { background: #ffac4d; }
-.plant-opt[data-kind="lfo"]    .dot { background: #4de0c8; }
+.plant-opt[data-kind="runner"] .dot { background: #4de0c8; }
 
 /* Event-trigger plant opts are visually distinct from persistent ones —
    a hollow burst icon rather than a filled dot to signal "one-shot event". */
