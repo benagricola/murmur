@@ -571,52 +571,32 @@ function auraIntensityLocal(aura, frac) {
 // particle carries the SEED's colour (it's material being torn off the
 // seed, so it stays seed-coloured) and there are enough of them to
 // read as a continuous stream.
-const PARTICLES_PER_STREAM = 9;
-const PARTICLE_BASE_R = 3.5;
-const tetherStreams = new Map();
+// === Aura-capture crescent ===
+// A captured voice wears a soft directional crescent on the side facing
+// each aura that holds it — in the aura's colour, opacity proportional
+// to the aura's intensity at the seed. Deliberately quiet + distinct
+// from the runner's bright plasma tendrils, and NEVER a radial bloom
+// (that's reserved for note-play feedback). The soft, faded ends come
+// from three stacked arcs of narrowing angular span — no per-seed
+// gradient needed, and it tracks the seed as it drifts.
+let captureCrescentGroup = null;
+const CRESCENT_SPANS = [0.95, 0.62, 0.32];   // half-angles (rad), widest first
+const CRESCENT_OPS   = [0.18, 0.22, 0.26];   // per-arc base opacity, ×intensity
 
-function ensureTetherStream(key, v, m, intensity) {
-  let cached = tetherStreams.get(key);
-  if (!cached) {
-    const g = document.createElementNS(SVGNS, 'g');
-    g.setAttribute('pointer-events', 'none');
-    const particles = [];
-    const phases = [];
-    for (let i = 0; i < PARTICLES_PER_STREAM; i++) {
-      const c = document.createElementNS(SVGNS, 'circle');
-      c.setAttribute('r', String(PARTICLE_BASE_R));
-      // Soft outer halo via stroke makes each particle pop against the
-      // aura's point cloud regardless of background colour. No filter
-      // node — SVG filters tank perf at our particle count.
-      c.setAttribute('stroke', m.color);
-      c.setAttribute('stroke-width', '1');
-      c.setAttribute('stroke-opacity', '0.6');
-      g.appendChild(c);
-      particles.push(c);
-      // Evenly spaced phases instead of pure random — gives a steady
-      // visible chain instead of clumps that briefly look empty.
-      phases.push(i / PARTICLES_PER_STREAM);
-    }
-    tethersLayer.appendChild(g);
-    cached = { gNode: g, particles, phases };
-    tetherStreams.set(key, cached);
-  }
-  // Particles are coloured with the SEED's hue (material being pulled
-  // off the seed) with the aura's hue as the halo — communicates the
-  // direction of flow.
-  for (const p of cached.particles) {
-    p.setAttribute('fill', v.color || '#fff');
-    p.setAttribute('stroke', m.color);
-  }
-  cached.gNode.dataset.intensity = intensity;
-  cached.gNode.dataset.vId = v.id;
-  cached.gNode.dataset.mId = m.id;
-  return cached;
+function crescentArc(cx, cy, rr, theta, half) {
+  const a0 = theta - half, a1 = theta + half;
+  const sx = cx + rr * Math.cos(a0), sy = cy + rr * Math.sin(a0);
+  const ex = cx + rr * Math.cos(a1), ey = cy + rr * Math.sin(a1);
+  return `M ${sx.toFixed(1)} ${sy.toFixed(1)} A ${rr.toFixed(1)} ${rr.toFixed(1)} 0 0 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`;
 }
 
 export function renderTethers() {
-  // Mark which streams should exist this pass.
-  const wantedKeys = new Set();
+  if (!captureCrescentGroup) {
+    captureCrescentGroup = document.createElementNS(SVGNS, 'g');
+    captureCrescentGroup.setAttribute('pointer-events', 'none');
+    tethersLayer.appendChild(captureCrescentGroup);
+  }
+  let svg = '';
   for (const v of seeds) {
     if (v.kind !== 'voice') continue;
     for (const m of seeds) {
@@ -624,17 +604,15 @@ export function renderTethers() {
       if (m.modifierKind === 'runner') continue;   // runners modulate via links, not capture
       const intensity = auraIntensityForSeed(m, v);
       if (intensity < 0.05) continue;
-      const key = `${v.id}-${m.id}`;
-      wantedKeys.add(key);
-      ensureTetherStream(key, v, m, intensity);
+      const theta = Math.atan2(m.cy - v.cy, m.cx - v.cx);   // toward the aura
+      const rr = (v.r || 12) * 1.45;
+      const scale = Math.min(1, intensity * 1.15);
+      for (let k = 0; k < CRESCENT_SPANS.length; k++) {
+        svg += `<path d="${crescentArc(v.cx, v.cy, rr, theta, CRESCENT_SPANS[k])}" fill="none" stroke="${m.color}" stroke-width="2.4" stroke-opacity="${(CRESCENT_OPS[k] * scale).toFixed(3)}" stroke-linecap="round"/>`;
+      }
     }
   }
-  // Tear down streams whose pair is no longer active.
-  for (const [key, cached] of tetherStreams) {
-    if (wantedKeys.has(key)) continue;
-    cached.gNode.remove();
-    tetherStreams.delete(key);
-  }
+  captureCrescentGroup.innerHTML = svg;
 }
 
 // === Runner tendrils ===
@@ -728,62 +706,12 @@ export function pruneRunnerLinksTo(targetId) {
   }
 }
 
-// Per-frame particle advance. Called from scheduler.visualTick so
-// streams animate smoothly even when nothing is moving. Each
-// particle walks a quadratic Bezier from the seed's edge to the
-// aura's centre; on reaching 1.0 it wraps to 0.0 with a small
-// random jitter so the stream doesn't pulse in lockstep.
+// Crescents are redrawn on every seed move (renderTethers) and once per
+// frame here, so a captured seed's crescent stays in sync as it drifts
+// through the field and the intensity changes. Cheap — a few arcs per
+// captured pair, no per-particle state.
 export function animateTethers() {
-  for (const [key, cached] of tetherStreams) {
-    const vId = parseInt(cached.gNode.dataset.vId);
-    const mId = parseInt(cached.gNode.dataset.mId);
-    const v = seedById(vId);
-    const m = seedById(mId);
-    if (!v || !m) continue;
-    const intensity = parseFloat(cached.gNode.dataset.intensity) || 0;
-    // Stream geometry — anchor on the seed's edge in the aura's
-    // direction (matches the attachmentsForSeed peak), curve into
-    // the aura's centre.
-    const ang = Math.atan2(m.cy - v.cy, m.cx - v.cx);
-    const ax = v.cx + v.r * PEAK_TIP_FACTOR * Math.cos(ang);
-    const ay = v.cy + v.r * PEAK_TIP_FACTOR * Math.sin(ang);
-    const bx = m.cx, by = m.cy;
-    const dx = bx - ax, dy = by - ay;
-    const len = Math.hypot(dx, dy);
-    const perpX = len ? -dy / len : 0, perpY = len ? dx / len : 0;
-    const sag = Math.min(len * 0.12, 28);
-    const ctrlX = (ax + bx) / 2 + perpX * sag;
-    const ctrlY = (ay + by) / 2 + perpY * sag;
-    // Particles flow at a rate scaled by intensity — stronger
-    // gravity pulls material in faster. Roughly 1.5s end-to-end
-    // at full intensity, 4s at the edge.
-    const speed = (0.004 + 0.012 * intensity);
-    for (let i = 0; i < cached.particles.length; i++) {
-      let phase = cached.phases[i] + speed;
-      if (phase >= 1) {
-        phase -= 1 + Math.random() * 0.08;   // small jitter on wrap
-        if (phase < 0) phase = 0;
-      }
-      cached.phases[i] = phase;
-      // Quadratic Bezier evaluation P(t) = (1-t)²P0 + 2(1-t)t P1 + t² P2
-      const t = phase;
-      const u = 1 - t;
-      const px = u * u * ax + 2 * u * t * ctrlX + t * t * bx;
-      const py = u * u * ay + 2 * u * t * ctrlY + t * t * by;
-      const p = cached.particles[i];
-      p.setAttribute('cx', px.toFixed(1));
-      p.setAttribute('cy', py.toFixed(1));
-      // Bright at the seed-end (just torn off) and fades as the
-      // particle is "absorbed" into the aura's centre. Shrinks too —
-      // the gravitational stretch metaphor. We keep a higher floor
-      // than before so the streams stay readable at lower intensities.
-      const fade = (1 - t) * 0.55 + 0.45;
-      const shrink = (1 - t * 0.6).toFixed(2);
-      const opacity = Math.min(1, intensity * 1.2) * fade;
-      p.setAttribute('opacity', opacity.toFixed(3));
-      p.setAttribute('r', (PARTICLE_BASE_R * shrink).toFixed(2));
-    }
-  }
+  renderTethers();
 }
 
 export function syncRenderedSeeds() {
