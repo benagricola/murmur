@@ -72,7 +72,11 @@ export const AURA_CURVES = {
 };
 export const AURA_CURVE_KEYS = Object.keys(AURA_CURVES);
 
-export function auraIntensityAt(aura, x, y) {
+// Pure geometric intensity of an aura at a point — falloff curve +
+// edge/centre values, no time-varying modulation. Used by the LFO
+// ("tide") coupling so tides read each other's raw fields without
+// feedback.
+export function auraSpatialIntensityAt(aura, x, y) {
   if (!aura || aura.kind !== 'modifier' || !aura.sphereR) return 0;
   const dist = Math.hypot(x - aura.cx, y - aura.cy);
   if (dist >= aura.sphereR) return 0;
@@ -83,6 +87,14 @@ export function auraIntensityAt(aura, x, y) {
   const edge = aura.edgeIntensity != null ? aura.edgeIntensity : 0;
   const cen  = aura.centerIntensity != null ? aura.centerIntensity : 1;
   return Math.max(0, Math.min(1, edge + t * (cen - edge)));
+}
+
+// Effective intensity — geometry × any live LFO/tide modulation on this
+// aura (`_lfoMod`, default 1). Every audio + scheduling consumer reads
+// this, so a tide squeezing an aura's `_lfoMod` toward 0 scales down its
+// drive / boost / delay-send / poly / etc. in lockstep.
+export function auraIntensityAt(aura, x, y) {
+  return auraSpatialIntensityAt(aura, x, y) * (aura._lfoMod != null ? aura._lfoMod : 1);
 }
 
 export function auraIntensityForSeed(aura, seed) {
@@ -213,6 +225,9 @@ export function makeSeed(opts) {
     wobbleDepth:  opts.wobbleDepth  !== undefined ? opts.wobbleDepth  : 0.6,
     crushBits:    opts.crushBits    !== undefined ? opts.crushBits    : 5,
     crushRate:    opts.crushRate    !== undefined ? opts.crushRate    : 0.35,
+    // LFO / tide aura: oscillation period in bars; modulates the
+    // strength of other auras within reach (#: tide aura).
+    lfoBars:      opts.lfoBars      !== undefined ? opts.lfoBars      : 2,
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
     attackFrac: attackMs / BAR_MS,
@@ -514,6 +529,13 @@ export function updateSphereTransforms() {
     const s = seedById(id);
     if (!s) continue;
     g.setAttribute('transform', `translate(${s.cx.toFixed(1)},${s.cy.toFixed(1)})`);
+    // Visual feedback for LFO/tide modulation: a tide's own field
+    // brightens + dims with its oscillator (_lfoVal); every aura a tide
+    // is squeezing fades with its _lfoMod, so you can SEE the breathing.
+    let op = 1;
+    if (s.modifierKind === 'lfo') op = 0.35 + 0.65 * (s._lfoVal != null ? s._lfoVal : 1);
+    else if (s._lfoMod != null) op = 0.25 + 0.75 * s._lfoMod;
+    g.setAttribute('opacity', op.toFixed(3));
   }
 }
 
@@ -595,6 +617,7 @@ export function renderTethers() {
     if (v.kind !== 'voice') continue;
     for (const m of seeds) {
       if (m.kind !== 'modifier') continue;
+      if (m.modifierKind === 'lfo') continue;   // tides modulate auras, not seeds
       const intensity = auraIntensityForSeed(m, v);
       if (intensity < 0.05) continue;
       const key = `${v.id}-${m.id}`;

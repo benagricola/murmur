@@ -39,6 +39,7 @@ import {
   SWING_OPTIONS, RIPPLE_DELAY_OPTIONS, CLOUD_SIZE_OPTIONS, POLY_RATIOS,
   WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR, DRIVE_COLOR,
   GAIN_COLOR, MUTE_COLOR, SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR, SHIFT_COLOR,
+  LFO_COLOR,
 } from '../constants.js';
 import {
   setupRippleChain, setupCloudChain, setupDriveChain, setupSquashChain,
@@ -88,6 +89,12 @@ const CRUSH_OPTIONS = [
   { label: '8-bit', val: 8 }, { label: '6-bit', val: 6 },
   { label: '5-bit', val: 5 }, { label: '4-bit', val: 4 },
   { label: '3-bit', val: 3 },
+];
+// Tide (LFO) oscillation period, in bars — musically synced.
+const LFO_RATE_OPTIONS = [
+  { label: '8 bars', val: 8 }, { label: '4 bars', val: 4 },
+  { label: '2 bars', val: 2 }, { label: '1 bar', val: 1 },
+  { label: '1/2', val: 0.5 },  { label: '1/4', val: 0.25 },
 ];
 
 export const AURAS = {
@@ -235,6 +242,22 @@ export const AURAS = {
     harmonics: { 2: 0.07, 3: 0.05, 5: 0.04 }, defaults: {},
     // No tunable param — strength is purely proximity (centerIntensity).
     param: null,
+  },
+  lfo: {
+    label: 'tide', color: LFO_COLOR, baseR: 32, coreClass: 'cloud-pulse',
+    harmonics: { 1: 0.08, 2: 0.05, 4: 0.03 },   // slow swell silhouette
+    defaults: { lfoBars: 2 },
+    // A tide doesn't process audio or touch seeds — it oscillates the
+    // STRENGTH of every other aura within reach over time (see
+    // scheduler.updateLfoModulation). Its edge/centre-intensity sliders
+    // set the modulation depth; this param sets the oscillation period.
+    param: {
+      prop: 'lfoBars', label: 'rate',
+      options: () => LFO_RATE_OPTIONS,
+      apply: (s, v) => { s.lfoBars = v; },
+      format: (v) => (v >= 1 ? v + ' bar' + (v > 1 ? 's' : '') : '1/' + Math.round(1 / v)),
+      tooltip: (s) => `tide ${s.lfoBars || 2} bar${(s.lfoBars || 2) > 1 ? 's' : ''}`,
+    },
   },
 };
 

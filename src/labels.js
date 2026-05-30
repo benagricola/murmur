@@ -26,6 +26,7 @@ export const KIND_LABELS = {
   wobble:   'wobble',   // LFO modulation — movement
   crush:    'crush',    // bitcrusher — lo-fi grit
   shift:    'shift',    // pattern variation roller
+  lfo:      'tide',     // LFO — modulates other auras' strength over time
   // Bloom kinds (radial one-shots — internal `pulse` category)
   drop:     'drop',
   muffle:   'muffle',

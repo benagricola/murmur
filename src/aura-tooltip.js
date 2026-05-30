@@ -8,7 +8,7 @@
 // pointer-leave or when no seed is under the cursor.
 
 import { seeds, seedById } from './state.js';
-import { auraIntensityForSeed, seedsLayer } from './seeds.js';
+import { auraIntensityForSeed, auraSpatialIntensityAt, seedsLayer } from './seeds.js';
 import { auraEntry, auraGainDefault } from './auras/registry.js';
 import { labelFor } from './labels.js';
 
@@ -67,6 +67,7 @@ function effectsForSeed(seed) {
   const out = [];
   for (const m of seeds) {
     if (m.kind !== 'modifier') continue;
+    if (m.modifierKind === 'lfo') continue;   // tides act on auras, not seeds
     const intensity = auraIntensityForSeed(m, seed);
     if (intensity < 0.01) continue;
     out.push({ aura: m, intensity });
@@ -81,6 +82,19 @@ function effectsForSeed(seed) {
 function seedsInAura(aura) {
   if (!aura || aura.kind !== 'modifier') return [];
   const out = [];
+  // A tide (lfo) acts on other AURAS, so report those — every modifier
+  // within its reach, with the proximity coupling that sets how hard it
+  // gets modulated.
+  if (aura.modifierKind === 'lfo') {
+    for (const m of seeds) {
+      if (m.kind !== 'modifier' || m === aura || m.modifierKind === 'lfo') continue;
+      const intensity = auraSpatialIntensityAt(aura, m.cx, m.cy);
+      if (intensity < 0.01) continue;
+      out.push({ seed: m, intensity });
+    }
+    out.sort((a, b) => String(a.seed.label || '').localeCompare(String(b.seed.label || '')));
+    return out;
+  }
   for (const s of seeds) {
     if (s.kind !== 'voice') continue;
     const intensity = auraIntensityForSeed(aura, s);
@@ -165,14 +179,15 @@ export function refreshTooltip() {
       <span class="dot" style="background:${colour}"></span>
       ${escapeHtml(labelFor(seed.modifierKind))} aura
     </div>`;
+    const isTide = seed.modifierKind === 'lfo';
     let body = settings ? `<div class="aura-tooltip-settings">${escapeHtml(settings)}</div>` : '';
     if (inside.length === 0) {
-      body += `<div class="aura-tooltip-empty">no seeds inside</div>`;
+      body += `<div class="aura-tooltip-empty">${isTide ? 'no auras in reach' : 'no seeds inside'}</div>`;
     } else {
-      body += `<div class="aura-tooltip-section">affecting:</div>`;
+      body += `<div class="aura-tooltip-section">${isTide ? 'modulating:' : 'affecting:'}</div>`;
       body += inside.map(e => `<div class="aura-tooltip-row">
         <span class="dot" style="background:${e.seed.color || '#888'}"></span>
-        <span class="name">${escapeHtml(e.seed.label || 'seed')}</span>
+        <span class="name">${escapeHtml(isTide ? labelFor(e.seed.modifierKind) : (e.seed.label || 'seed'))}</span>
         <span class="val">${Math.round(e.intensity * 100)}%</span>
       </div>`).join('');
     }
