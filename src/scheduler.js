@@ -256,21 +256,60 @@ export function scheduleAhead() {
       swing = 0.5 + (avgSwing - 0.5) * i;
     }
 
-    // Catch-up logic: re-anchor patternIdx when nextTrigger is
-    // stale OR has been cleared (set to 0 by a rhythm change /
-    // tempo change / play start). Without the !nextTrigger case,
-    // changing the rhythm picker mid-play left patternIdx pointing
-    // to a fireTime far in the future and the seed went silent.
-    if (!seed.nextTrigger || seed.nextTrigger < now - 1) {
+    // Per-seed fire anchor. fireTime = _fireAnchor + stepFireOffset(idx).
+    //
+    // Re-anchor (recompute the anchor from scratch) when the seed is
+    // fresh or its nextTrigger went stale / was cleared (rhythm change,
+    // tempo change, play start). Without that, changing the rhythm
+    // picker mid-play left patternIdx pointing at a far-future fireTime
+    // and the seed went silent.
+    //
+    // Crucially, ALSO re-anchor when the effective interval or swing
+    // changes — which is what a vine (poly) or weave aura does to a
+    // captured seed as it drifts through the field. fireTime scales the
+    // MONOTONIC patternIdx by the interval, so a change of Δinterval
+    // shifts the current step by patternIdx × Δinterval (seconds, once
+    // patternIdx is large). That made a seed leaving a vine jump far
+    // into the future — a long silent pause. Here we shift the anchor
+    // so the CURRENT step holds its fire time and only LATER steps
+    // re-space at the new rate: a smooth tempo glide, no discontinuity.
+    if (seed._fireAnchor == null && seed.nextTrigger && seed.nextTrigger >= now - 1) {
+      // First scheduler pass on a seed whose (patternIdx, nextTrigger)
+      // was set externally to mean "fire THIS step at THIS time" — e.g.
+      // a fresh recording snapped to the next bar. Derive the anchor so
+      // that exact fire time is honoured.
+      seed._fireAnchor = seed.nextTrigger - stepFireOffset(seed.patternIdx, baseInterval, swing);
+      seed._lastInterval = baseInterval;
+      seed._lastSwing = swing;
+    } else if (!seed.nextTrigger || seed.nextTrigger < now - 1 || seed._fireAnchor == null) {
+      // (Re)derive from the global grid: a brand-new seed, or one whose
+      // nextTrigger went stale / was cleared (rhythm change, tempo
+      // change, play start). Without this, changing the rhythm picker
+      // mid-play left patternIdx pointing at a far-future fireTime and
+      // the seed went silent.
       if (seed.quantize) {
         const since = now - state.playbackStartTime;
         seed.patternIdx = Math.max(0, Math.ceil(since / baseInterval));
+        seed._fireAnchor = state.playbackStartTime;
       } else {
-        // Free-running: re-anchor playbackStartTime so step
-        // `patternIdx` fires ~now. This is the equivalent of the old
-        // `nextTrigger = now + 0.04` snap.
-        state.playbackStartTime = now + 0.04 - stepFireOffset(seed.patternIdx, baseInterval, swing);
+        seed._fireAnchor = now + 0.04 - stepFireOffset(seed.patternIdx, baseInterval, swing);
       }
+      seed._lastInterval = baseInterval;
+      seed._lastSwing = swing;
+    } else if (Math.abs(baseInterval - seed._lastInterval) > 1e-9 ||
+               Math.abs(swing - seed._lastSwing) > 1e-9) {
+      // Effective interval/swing changed while playing — a captured
+      // seed drifting through a vine (poly) or weave aura, or a global
+      // tempo change. Shift the anchor so the CURRENT step keeps its
+      // fire time and only LATER steps re-space at the new rate. The
+      // old code recomputed fireTime as playbackStartTime + patternIdx ×
+      // interval, so any Δinterval moved the current step by patternIdx
+      // × Δinterval — seconds once patternIdx was large — making a seed
+      // leaving a vine jump far into the future (the silent pause).
+      seed._fireAnchor += stepFireOffset(seed.patternIdx, seed._lastInterval, seed._lastSwing)
+                        - stepFireOffset(seed.patternIdx, baseInterval, swing);
+      seed._lastInterval = baseInterval;
+      seed._lastSwing = swing;
     }
 
     // Schedule every step whose fire time falls inside our lookahead
@@ -283,7 +322,7 @@ export function scheduleAhead() {
     // every play, so each press re-triggers the one-shot.
     while (true) {
       if (seed.loop === false && seed.patternIdx >= seed.pattern.length) break;
-      const fireTime = state.playbackStartTime + stepFireOffset(seed.patternIdx, baseInterval, swing);
+      const fireTime = seed._fireAnchor + stepFireOffset(seed.patternIdx, baseInterval, swing);
       if (fireTime >= now + lookahead) {
         seed.nextTrigger = fireTime;  // kept for diagnostic / catch-up logic
         break;
