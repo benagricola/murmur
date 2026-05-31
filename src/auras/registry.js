@@ -58,6 +58,27 @@ function retrigger(seed) {
   }
 }
 
+const lerp = (a, b, t) => a + (b - a) * t;
+// Smoothly drive an AudioParam toward a value; no-op if absent.
+function ramp(param, value) {
+  if (param && audioCtx) param.setTargetAtTime(value, at(), 0.03);
+}
+
+// Per-kind modulation destinations a runner tendril can drive, beyond
+// the universal 'strength'. Each maps the runner's 0..1 signal across a
+// musical range on an AudioParam-backed node (cheap to ramp per frame).
+// Curve-based params (drive amount, crush bits) are intentionally NOT
+// here — rebuilding a waveshaper curve per frame is wasteful — so their
+// only smooth destination is strength.
+const MOD_TARGETS = {
+  ripple: [{ key: 'delay', label: 'delay time', apply: (s, v) => ramp(s.delayNode && s.delayNode.delayTime, lerp(0.04, 0.56, v)) }],
+  drive:  [{ key: 'tone',  label: 'tone',       apply: (s, v) => ramp(s.driveLP && s.driveLP.frequency, lerp(1200, 7000, v)) }],
+  squash: [{ key: 'threshold', label: 'threshold', apply: (s, v) => ramp(s.squashComp && s.squashComp.threshold, lerp(-48, -14, v)) }],
+  wobble: [{ key: 'rate',  label: 'lfo rate',   apply: (s, v) => ramp(s.wobbleLFO && s.wobbleLFO.frequency, lerp(0.5, 12, v)) }],
+  crush:  [{ key: 'tone',  label: 'tone',       apply: (s, v) => ramp(s.crushProcessor && s.crushProcessor.frequency, lerp(700, 6500, v)) }],
+};
+export function auraModTargets(kind) { return MOD_TARGETS[kind] || []; }
+
 // Static option lists for the louder/dirtier auras (previously inline
 // in inspector.js). Returned via a thunk for a uniform options() API.
 const DRIVE_OPTIONS = [

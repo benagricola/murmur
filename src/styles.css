@@ -834,6 +834,32 @@ svg.canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
   color: #ffe066;
   border-color: rgba(255, 209, 102, 0.5);
 }
+
+/* Runner tendril list (inspector) */
+.runner-link-row {
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  color: var(--ink-faint); padding: 3px 0;
+}
+.runner-link-row .name { flex: 0 0 auto; }
+.runner-link-dest {
+  margin-left: auto;
+  background: rgba(255,255,255,0.05);
+  color: var(--ink-faint);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+  padding: 1px 4px;
+}
+.runner-link-remove {
+  background: none; border: none; color: #e85a6f;
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
+.runner-link-remove:hover { color: #ff8a9c; }
+.runner-link-empty {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+  color: var(--ink-faint); opacity: 0.7; padding: 4px 0;
+}
 .captured-info {
   font-family: 'Newsreader', serif;
   font-style: italic;

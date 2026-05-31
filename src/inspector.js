@@ -10,7 +10,7 @@ import {
 } from './constants.js';
 import { audioCtx, NUM_HARMONICS } from './audio/context.js';
 import { BAR_MS } from './tempo.js';
-import { auraEntry } from './auras/registry.js';
+import { auraEntry, auraModTargets } from './auras/registry.js';
 import {
   TIMBRE_ROLES, LIVE_TIMBRE_CYCLE_ROLES,
   setLiveRole, regenerateLiveTimbre, revertLiveTimbre, liveTimbre,
@@ -354,9 +354,30 @@ function renderRunnerLinks(runner) {
     const t = seedById(link.targetId);
     const row = document.createElement('div');
     row.className = 'runner-link-row';
-    const name = t ? `${labelFor(t.modifierKind)} · ${link.dest || 'strength'}` : '(removed)';
+    const isAura = t && t.kind === 'modifier';
+    const tname = t ? (isAura ? labelFor(t.modifierKind) : (t.label || 'seed')) : '(removed)';
     row.innerHTML = `<span class="dot" style="background:${t ? t.color : '#666'}"></span>` +
-      `<span class="name">${escapeHtml(name)}</span>`;
+      `<span class="name">${escapeHtml(tname)}</span>`;
+    if (t) {
+      // Destination picker — what the tendril modulates on this target.
+      const sel = document.createElement('select');
+      sel.className = 'runner-link-dest';
+      const opts = isAura
+        ? [['strength', 'strength'], ...auraModTargets(t.modifierKind).map(m => [m.key, m.label])]
+        : [['volume', 'volume'], ['pitch', 'pitch']];
+      const cur = link.dest || (isAura ? 'strength' : 'volume');
+      for (const [val, lbl] of opts) {
+        const o = document.createElement('option');
+        o.value = val; o.textContent = lbl;
+        if (val === cur) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => {
+        link.dest = sel.value;
+        takeSnapshotFn('tendril → ' + sel.value);
+      });
+      row.appendChild(sel);
+    }
     const rm = document.createElement('button');
     rm.className = 'runner-link-remove';
     rm.textContent = '×';

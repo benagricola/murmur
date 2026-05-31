@@ -246,14 +246,13 @@ function endDrag() {
 let connectDrag = null;
 let connectPreviewEl = null;
 
-// Nearest aura (modifier, not a runner) under the cursor, within a
-// forgiving snap radius — the link target. Stage 1 targets auras only;
-// seed targets arrive in Stage 2.
+// Nearest link target under the cursor (a voice seed or an aura, but
+// never another runner), within a forgiving snap radius.
 function snapTargetAt(c, excludeId) {
   let best = null, bestDist = Infinity;
   for (const s of seeds) {
     if (s.id === excludeId) continue;
-    if (s.kind !== 'modifier' || s.modifierKind === 'runner') continue;
+    if (s.modifierKind === 'runner') continue;   // can't modulate a runner
     const d = Math.hypot(c.x - s.cx, c.y - s.cy);
     if (d <= (s.r || 30) * 2.4 && d < bestDist) { bestDist = d; best = s; }
   }
@@ -294,11 +293,18 @@ function endConnectDrag() {
   if (!connectDrag) return;
   const r = connectDrag.runner;
   if (connectDrag.target) {
-    // Toggle the link: drag onto a linked aura to remove it.
+    // Toggle the link: drag onto a linked target to remove it.
+    const tgt = connectDrag.target;
+    const name = tgt.kind === 'modifier' ? labelFor(tgt.modifierKind) : (tgt.label || 'seed');
     if (!r.links) r.links = [];
-    const i = r.links.findIndex(l => l.targetId === connectDrag.target.id);
-    if (i >= 0) { r.links.splice(i, 1); takeSnapshot('unlinked ' + labelFor(connectDrag.target.modifierKind)); }
-    else { r.links.push({ targetId: connectDrag.target.id, dest: 'strength', amount: 1 }); takeSnapshot('linked ' + labelFor(connectDrag.target.modifierKind)); }
+    const i = r.links.findIndex(l => l.targetId === tgt.id);
+    if (i >= 0) { r.links.splice(i, 1); takeSnapshot('unlinked ' + name); }
+    else {
+      // Default destination by target type: aura → strength, seed → volume.
+      const dest = tgt.kind === 'modifier' ? 'strength' : 'volume';
+      r.links.push({ targetId: tgt.id, dest, amount: 1 });
+      takeSnapshot('linked ' + name);
+    }
     selectSeed(r.id);   // refresh the inspector link list
   } else if (connectDrag.moved) {
     // Dropped on empty canvas after moving → reposition the runner.

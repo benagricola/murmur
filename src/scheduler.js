@@ -26,7 +26,7 @@ import {
   SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
   updateSphereTransforms, auraIntensityForSeed, renderRunnerTendrils,
 } from './seeds.js';
-import { auraGainDefault } from './auras/registry.js';
+import { auraGainDefault, auraModTargets } from './auras/registry.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 import { refreshTooltip as refreshAuraTooltip } from './aura-tooltip.js';
 
@@ -34,6 +34,11 @@ let stepHighlightHandler = null;
 export function setStepHighlightHandler(fn) { stepHighlightHandler = fn; }
 
 export function playNoteAt(seed, when, freq, gain, sustainMs, patchOverride) {
+  // Runner pitch modulation: a tendril targeting this seed's pitch sets
+  // _pitchMod (cents) each frame; we apply it per note at fire time (the
+  // note keeps that pitch — successive notes track the LFO, which reads
+  // as vibrato at musical rates).
+  if (seed._pitchMod) freq *= Math.pow(2, seed._pitchMod / 1200);
   // All seeds dispatch through the patch player. Drums (category 'drum')
   // are one-shot inside playPatch; tonal patches get attack → sustain
   // → release shaped by patch.envelope.
@@ -528,6 +533,9 @@ function updateAuraModulation() {
       const amount = m.gainAmount != null ? m.gainAmount : auraGainDefault(m.modifierKind);
       mult *= 1 + (amount - 1) * intensity;
     }
+    // Runner volume tremolo rides on the same gain node (set in
+    // updateRunnerModulation; resting 1.0 when no runner targets it).
+    if (seed._modVol != null) mult *= seed._modVol;
     // Clamp to a sensible band so a stack of gain auras doesn't blow
     // up to absurd levels.
     if (mult < 0)   mult = 0;
@@ -558,20 +566,32 @@ function updateRunnerModulation(now) {
     R._lfoVal = 0.5 + 0.5 * Math.sin((t / periodSec) * Math.PI * 2);
     R._lfoMod = 1;
   }
-  // Reset every other aura's _lfoMod, then apply each runner's links.
+  // Reset modulation accumulators each frame, then re-apply active
+  // links — so removing a link (or a runner) restores the target next
+  // frame with no explicit cleanup.
   for (const m of seeds) {
-    if (m.kind !== 'modifier' || m.modifierKind === 'runner') continue;
-    m._lfoMod = 1;
+    if (m.kind === 'modifier' && m.modifierKind !== 'runner') m._lfoMod = 1;
+    else if (m.kind === 'voice') { m._modVol = 1; m._pitchMod = 0; }
   }
   for (const R of runners) {
     const amp = R.centerIntensity != null ? R.centerIntensity : 1;   // modulation depth
+    const val = R._lfoVal;                       // 0..1
+    const down = 1 - amp * (1 - val);            // unipolar (tremolo / strength)
+    const bipolar = 0.5 + (val - 0.5) * amp;     // swings around 0.5, for params
     for (const link of (R.links || [])) {
       const target = seedById(link.targetId);
       if (!target) continue;
-      // Stage 1: the 'strength' destination on an aura target. (Seed
-      // targets + named-param destinations land in Stage 2.)
-      if (target.kind === 'modifier' && (link.dest || 'strength') === 'strength') {
-        target._lfoMod *= 1 - amp * (1 - R._lfoVal);
+      const dest = link.dest || (target.kind === 'modifier' ? 'strength' : 'volume');
+      if (target.kind === 'modifier') {
+        if (dest === 'strength') {
+          target._lfoMod *= down;
+        } else {
+          const mt = auraModTargets(target.modifierKind).find(t => t.key === dest);
+          if (mt) mt.apply(target, bipolar);
+        }
+      } else if (target.kind === 'voice') {
+        if (dest === 'pitch') target._pitchMod += (val - 0.5) * 2 * amp * 200;   // ±amp whole-tone
+        else target._modVol *= down;                                            // volume tremolo
       }
     }
   }
