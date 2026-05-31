@@ -91,26 +91,31 @@ export function routeFinalOutput(seed, node) {
     if (filterBomb) {
       node.connect(filterBomb.filterNode);
     } else {
-      // Two persistent per-seed gain nodes:
-      //   seed.auraGain  — modulated by gain/mute proximity each tick
-      //                    (scheduler.updateAuraModulation). Resting
-      //                    value 1.0 when no aura affects the seed.
-      //   seed.postGain  — collision duck handles this. Resting 1.0.
-      // Chain: node → auraGain → postGain → dest. Both lazily-created.
+      // Persistent per-seed dry-path nodes:
+      //   seed.auraGain  — gain/mute proximity + runner volume each tick.
+      //   seed.postGain  — collision duck. Resting 1.0.
+      //   seed.panNode   — stereo position; pan auras ramp it each tick
+      //                    (resting 0 = centred, transparent).
+      // Chain: node → auraGain → postGain → panNode → dest.
       const cat = seed.patch && seed.patch.category;
       const isDrum = cat === 'drum' || cat === 'drum-kit';
       const dest = isDrum && drumBus ? drumBus : masterGain;
+      if (!seed.panNode && audioCtx && audioCtx.createStereoPanner) {
+        seed.panNode = audioCtx.createStereoPanner();
+        seed.panNode.connect(dest);
+      }
+      const afterPost = seed.panNode || dest;
       if (!seed.postGain && audioCtx) {
         seed.postGain = audioCtx.createGain();
         seed.postGain.gain.value = 1.0;
-        seed.postGain.connect(dest);
+        seed.postGain.connect(afterPost);
       }
       if (!seed.auraGain && audioCtx) {
         seed.auraGain = audioCtx.createGain();
         seed.auraGain.gain.value = 1.0;
-        seed.auraGain.connect(seed.postGain || dest);
+        seed.auraGain.connect(seed.postGain || afterPost);
       }
-      node.connect(seed.auraGain || seed.postGain || dest);
+      node.connect(seed.auraGain || seed.postGain || afterPost);
     }
     // Proximity-graded ripple / cloud sends. For every aura on the
     // canvas, compute its intensity at this seed's position and route

@@ -229,6 +229,7 @@ export function makeSeed(opts) {
     // links it drives. Each link = { targetId, dest, amount }; dest is
     // 'strength' for an aura target (Stage 1). Amplitude = centerIntensity.
     lfoBars:      opts.lfoBars      !== undefined ? opts.lfoBars      : 2,
+    panBars:      opts.panBars      !== undefined ? opts.panBars      : 1,
     links:        opts.links ? opts.links.map(l => ({ ...l })) : [],
     synthesisModel: opts.synthesisModel || 'additive',
     attackMs,
@@ -293,6 +294,7 @@ export function removeSeed(id) {
   // Disconnect the seed's persistent audio nodes so nothing leaks.
   if (seed.postGain)    { try { seed.postGain.disconnect(); }    catch (e) {} seed.postGain = null; }
   if (seed.auraGain)    { try { seed.auraGain.disconnect(); }    catch (e) {} seed.auraGain = null; }
+  if (seed.panNode)     { try { seed.panNode.disconnect(); }     catch (e) {} seed.panNode = null; }
   if (seed.driveInput)  { try { seed.driveInput.disconnect(); }  catch (e) {} seed.driveInput = null; }
   // Disconnect modifier audio chains owned by this seed (delay/reverb
   // inputs) so their tails go silent rather than ringing into masterGain.

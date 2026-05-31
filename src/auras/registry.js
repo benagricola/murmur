@@ -39,7 +39,7 @@ import {
   SWING_OPTIONS, RIPPLE_DELAY_OPTIONS, CLOUD_SIZE_OPTIONS, POLY_RATIOS,
   WEAVE_COLOR, RIPPLE_COLOR, CLOUD_COLOR, POLY_COLOR, DRIVE_COLOR,
   GAIN_COLOR, MUTE_COLOR, SQUASH_COLOR, WOBBLE_COLOR, CRUSH_COLOR, SHIFT_COLOR,
-  RUNNER_COLOR,
+  RUNNER_COLOR, PAN_COLOR,
 } from '../constants.js';
 import {
   setupRippleChain, setupCloudChain, setupDriveChain, setupSquashChain,
@@ -263,6 +263,20 @@ export const AURAS = {
     harmonics: { 2: 0.07, 3: 0.05, 5: 0.04 }, defaults: {},
     // No tunable param — strength is purely proximity (centerIntensity).
     param: null,
+  },
+  pan: {
+    label: 'pan', color: PAN_COLOR, baseR: 32, coreClass: 'cloud-pulse',
+    harmonics: { 1: 0.05, 3: 0.04 }, defaults: { panBars: 1 },
+    // A capturing aura that auto-pans its voices across the stereo field
+    // at its own rate (scheduler.updatePanModulation). centreIntensity =
+    // pan width; this param = the sweep period.
+    param: {
+      prop: 'panBars', label: 'rate',
+      options: () => LFO_RATE_OPTIONS,
+      apply: (s, v) => { s.panBars = v; },
+      format: (v) => (v >= 1 ? v + ' bar' + (v > 1 ? 's' : '') : '1/' + Math.round(1 / v)),
+      tooltip: (s) => `pan ${s.panBars || 1} bar${(s.panBars || 1) > 1 ? 's' : ''}`,
+    },
   },
   runner: {
     label: 'runner', color: RUNNER_COLOR, baseR: 26, coreClass: 'cloud-pulse',

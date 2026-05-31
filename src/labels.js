@@ -26,6 +26,7 @@ export const KIND_LABELS = {
   wobble:   'wobble',   // LFO modulation — movement
   crush:    'crush',    // bitcrusher — lo-fi grit
   shift:    'shift',    // pattern variation roller
+  pan:      'pan',      // auto-pan captured voices across the stereo field
   runner:   'runner',   // LFO modulator — sends tendrils that oscillate targets
   // Bloom kinds (radial one-shots — internal `pulse` category)
   drop:     'drop',

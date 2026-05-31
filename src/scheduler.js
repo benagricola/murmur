@@ -597,6 +597,33 @@ function updateRunnerModulation(now) {
   }
 }
 
+// Pan auras auto-pan their captured voices across the stereo field at
+// their own rate (panBars), width = centreIntensity, scaled by the
+// aura's proximity intensity at each voice. Net pan sums across pan
+// auras and rides each voice's persistent panNode (resting 0 = centre,
+// so a voice leaving the field re-centres smoothly).
+function updatePanModulation(now) {
+  if (!audioCtx) return;
+  const t = now - (state.playbackStartTime || 0);
+  const pans = [];
+  for (const m of seeds) {
+    if (m.kind !== 'modifier' || m.modifierKind !== 'pan' || !m.sphereR) continue;
+    const period = Math.max(0.05, (m.panBars || 1) * BAR_MS / 1000);
+    pans.push({ m, val: Math.sin((t / period) * Math.PI * 2), width: m.centerIntensity != null ? m.centerIntensity : 1 });
+  }
+  for (const v of seeds) {
+    if (v.kind !== 'voice' || !v.panNode) continue;
+    let net = 0;
+    for (const P of pans) {
+      const intensity = auraIntensityForSeed(P.m, v);
+      if (intensity < 0.01) continue;
+      net += P.val * P.width * intensity;
+    }
+    if (net > 1) net = 1; else if (net < -1) net = -1;
+    try { v.panNode.pan.setTargetAtTime(net, now, 0.04); } catch (e) {}
+  }
+}
+
 function visualTick() {
   const now = audioCtx ? audioCtx.currentTime : 0;
   physicsStep();
@@ -604,6 +631,7 @@ function visualTick() {
   updateSphereTransforms();   // every frame so modulated auras breathe
   renderRunnerTendrils();
   updateAuraModulation();
+  updatePanModulation(now);
   // Aura-tooltip live refresh — short-circuits inside the module
   // when nothing is hovered.
   refreshAuraTooltip();

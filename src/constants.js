@@ -128,6 +128,8 @@ export const SHIFT_COLOR  = '#ffac4d';
 // Runner (LFO modulator): a node that sends tendrils to seeds/auras
 // and oscillates their strength / parameters over time.
 export const RUNNER_COLOR = '#4de0c8';
+// Pan aura: auto-pans captured voices across the stereo field.
+export const PAN_COLOR    = '#5fd0a0';
 
 // === Small generic helpers ===
 export function makeHarmonicsArr() { return new Array(12).fill(0); }

@@ -38,7 +38,7 @@ const SCALAR_FIELDS = [
   'muted', 'sphereR', 'edgeIntensity', 'centerIntensity', 'falloffCurve',
   'driveAmount', 'gainAmount', 'squashAmount', 'wobbleRate', 'wobbleDepth',
   'crushBits', 'crushRate', 'reverbSec', 'role', 'swing', 'synthesisModel',
-  'polyFactor', 'lfoBars', 'patternBankIdx',
+  'polyFactor', 'lfoBars', 'panBars', 'patternBankIdx',
 ];
 const RUNTIME_RESET = {
   patternIdx: 0, currentStep: -1, nextTrigger: 0, lastPulseAt: 0,
