@@ -767,7 +767,10 @@ function updateEvents() {
           // crosses phase. Without this we'd wait for the wavefront
           // to reach the seed's centre, making sweeps feel laggy.
           const edgeT = t - (seed.r || 0) / sweepLen;
-          if (edgeT <= phase && t <= 1) {
+          // t < 0 means the seed is BEHIND the start point (opposite the
+          // wind's direction) — outside the swept band, never affected.
+          // t > 1 is beyond the end. The wavefront only travels [0,1].
+          if (t >= 0 && t <= 1 && edgeT <= phase) {
             ev.affectedSeedIds.add(seed.id);
             if (def.action === 'mute') seed.muted = true;
             else if (def.action === 'unmute') seed.muted = false;
@@ -843,19 +846,52 @@ function renderEvents() {
       const a1x = ev.x0 - perpX * EXT, a1y = ev.y0 - perpY * EXT;
       const w0x = wfX + perpX * EXT,   w0y = wfY + perpY * EXT;
       const w1x = wfX - perpX * EXT,   w1y = wfY - perpY * EXT;
+      // Faint swept region behind the front.
       const trail = document.createElementNS(SVGNS, 'polygon');
       trail.setAttribute('points',
         `${a0x.toFixed(1)},${a0y.toFixed(1)} ${a1x.toFixed(1)},${a1y.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w0x.toFixed(1)},${w0y.toFixed(1)}`);
       trail.setAttribute('fill', ev.color);
-      trail.setAttribute('fill-opacity', ev.state === 'active' ? 0.10 : 0.05);
+      trail.setAttribute('fill-opacity', ev.state === 'active' ? 0.07 : 0.04);
       eventsLayer.appendChild(trail);
       if (ev.state === 'active') {
+        // Wind streaks: short motion lines with bright heads riding the
+        // wavefront across a visible band, lengths gusting over time so
+        // the front reads as moving air, not a ruler.
+        const N = 11, spread = 560;
+        for (let k = 0; k < N; k++) {
+          const o = (k / (N - 1) - 0.5) * spread;
+          const j = 0.5 + 0.5 * Math.sin(tnow * 0.004 + k * 1.7);
+          const sl = 36 + 100 * j;
+          const lx = wfX + perpX * o, ly = wfY + perpY * o;
+          const bx = lx - dxn * sl, by = ly - dyn * sl;
+          const streak = document.createElementNS(SVGNS, 'line');
+          streak.setAttribute('x1', lx.toFixed(1)); streak.setAttribute('y1', ly.toFixed(1));
+          streak.setAttribute('x2', bx.toFixed(1)); streak.setAttribute('y2', by.toFixed(1));
+          streak.setAttribute('stroke', ev.color);
+          streak.setAttribute('stroke-width', '1.4');
+          streak.setAttribute('stroke-opacity', (0.10 + 0.22 * j).toFixed(3));
+          streak.setAttribute('stroke-linecap', 'round');
+          eventsLayer.appendChild(streak);
+          const head = document.createElementNS(SVGNS, 'circle');
+          head.setAttribute('cx', lx.toFixed(1)); head.setAttribute('cy', ly.toFixed(1));
+          head.setAttribute('r', (1.6 + 1.4 * j).toFixed(1));
+          head.setAttribute('fill', ev.color);
+          head.setAttribute('opacity', (0.5 + 0.4 * j).toFixed(3));
+          eventsLayer.appendChild(head);
+        }
+        // Soft glow under a bright wavefront edge across the canvas.
+        const glow = document.createElementNS(SVGNS, 'line');
+        glow.setAttribute('x1', w0x.toFixed(1)); glow.setAttribute('y1', w0y.toFixed(1));
+        glow.setAttribute('x2', w1x.toFixed(1)); glow.setAttribute('y2', w1y.toFixed(1));
+        glow.setAttribute('stroke', ev.color); glow.setAttribute('stroke-width', '9');
+        glow.setAttribute('stroke-opacity', '0.14'); glow.setAttribute('stroke-linecap', 'round');
+        eventsLayer.appendChild(glow);
         const line = document.createElementNS(SVGNS, 'line');
         line.setAttribute('x1', w0x.toFixed(1)); line.setAttribute('y1', w0y.toFixed(1));
         line.setAttribute('x2', w1x.toFixed(1)); line.setAttribute('y2', w1y.toFixed(1));
         line.setAttribute('stroke', ev.color);
-        line.setAttribute('stroke-width', 3);
-        line.setAttribute('stroke-opacity', 0.85);
+        line.setAttribute('stroke-width', '2.5');
+        line.setAttribute('stroke-opacity', '0.9');
         eventsLayer.appendChild(line);
       }
     }

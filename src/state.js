@@ -62,9 +62,9 @@ export const state = {
   //                  control so they could fire fast-expanding,
   //                  long-fading drops or slow-creeping muffles.
   bloomSettings: {
-    drop:   { maxRadius: 320, expandBars: 0.25, durationBars: 1.5 },
-    muffle: { maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
-    thin:   { maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
+    drop:   { maxRadius: 320, expandBars: 0.25, durationBars: 4 },
+    muffle: { maxRadius: 360, expandBars: 0.5,  durationBars: 4 },
+    thin:   { maxRadius: 360, expandBars: 0.5,  durationBars: 4 },
   },
   windSettings: {
     rise: { durationBars: 4 },

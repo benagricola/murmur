@@ -32,9 +32,9 @@ function seedHasVolumeRunner(seed) {
 // lifetime, with the effect fading linearly over the hold remainder
 // before popping. Spawn-time tunables in state.bloomSettings override.
 export const PULSE_KINDS = {
-  drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, expandBars: 0.25, durationBars: 1.5 },
-  muffle: { label: 'muffle', color: '#5e7ad8', maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
-  thin:   { label: 'thin',   color: '#ffd84d', maxRadius: 360, expandBars: 0.5,  durationBars: 2.0 },
+  drop:   { label: 'drop',   color: '#ff4d80', maxRadius: 320, expandBars: 0.25, durationBars: 4 },
+  muffle: { label: 'muffle', color: '#5e7ad8', maxRadius: 360, expandBars: 0.5,  durationBars: 4 },
+  thin:   { label: 'thin',   color: '#ffd84d', maxRadius: 360, expandBars: 0.5,  durationBars: 4 },
 };
 
 // Sweeps are directional lines that travel from start→end over a fixed
