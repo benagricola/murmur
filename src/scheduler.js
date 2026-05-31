@@ -13,7 +13,7 @@
 // setStepHighlightHandler — keeps the scheduler agnostic of the
 // inspector module.
 
-import { freqFromMidi, midiFromFreq, snapToScale } from './constants.js';
+import { freqFromMidi, midiFromFreq } from './constants.js';
 import { audioCtx } from './audio/context.js';
 import { playPatch } from './audio/voices.js';
 import { patchFromLegacySeed } from './audio/patches.js';
@@ -163,19 +163,18 @@ export function playSeedStep(seed, when) {
   }
 
   // === Tonal branch (default) ===
+  // Pitch is always faithful to the recorded / authored offset — the
+  // offset encodes the exact interval the user played. seed.quantize is
+  // a TIMING toggle only (it gates the micro-timing tOffset above); it
+  // must NOT snap pitch, or an off-scale note the user played gets
+  // pulled to the nearest scale tone on playback.
   const baseMidi = midiFromFreq(seed.fundamental);
-  const targetMidi = baseMidi + (step.offset || 0);
-  // seed.quantize gates two things: pitch snap-to-scale AND micro-
-  // timing snap to the grid step. tOffset (set at record time) holds
-  // the original off-grid displacement; honour it only when quantize
-  // is off so the user can switch between clean-grid and as-played.
-  const finalMidi = seed.quantize ? snapToScale(targetMidi) : targetMidi;
+  const finalMidi = baseMidi + (step.offset || 0);
   const freq = freqFromMidi(finalMidi);
   playNoteAt(seed, fireAt, freq, baseGain * step.velocity, sustainMs);
   if (step.extras && step.extras.length > 0) {
     for (const ex of step.extras) {
-      const exMidi = baseMidi + (ex.offset || 0);
-      const exFinalMidi = seed.quantize ? snapToScale(exMidi) : exMidi;
+      const exFinalMidi = baseMidi + (ex.offset || 0);
       const exFreq = freqFromMidi(exFinalMidi);
       const exDuration = ex.duration !== undefined ? ex.duration : stepDuration;
       const exSustainMs = exDuration * seed.intervalMs;
