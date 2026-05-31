@@ -15,6 +15,18 @@ import { BAR_MS } from '../tempo.js';
 import { auraIntensityForSeed } from '../seeds.js';
 import { auraEntry } from '../auras/registry.js';
 
+// True if any runner has a tendril modulating this seed's VOLUME — used
+// to bypass the drum glue bus so the tremolo isn't compressed away.
+function seedHasVolumeRunner(seed) {
+  for (const m of seeds) {
+    if (m.modifierKind !== 'runner' || !m.links) continue;
+    for (const l of m.links) {
+      if (l.targetId === seed.id && (l.dest || '') === 'volume') return true;
+    }
+  }
+  return false;
+}
+
 // PULSE_KINDS defaults — expandBars sets the shockwave velocity (how
 // many bars until maxRadius is reached); durationBars sets total
 // lifetime, with the effect fading linearly over the hold remainder
@@ -99,10 +111,22 @@ export function routeFinalOutput(seed, node) {
       // Chain: node → auraGain → postGain → panNode → dest.
       const cat = seed.patch && seed.patch.category;
       const isDrum = cat === 'drum' || cat === 'drum-kit';
-      const dest = isDrum && drumBus ? drumBus : masterGain;
+      // A drum whose VOLUME a runner is modulating bypasses the glue
+      // bus and goes straight to master — otherwise the bus compressor
+      // (fast attack, 4:1) flattens the tremolo and the modulation is
+      // barely audible. It loses kit-glue while modulated; the trade is
+      // worth it for working volume control.
+      const wantBus = isDrum && drumBus && !seedHasVolumeRunner(seed);
+      const dest = wantBus ? drumBus : masterGain;
       if (!seed.panNode && audioCtx && audioCtx.createStereoPanner) {
         seed.panNode = audioCtx.createStereoPanner();
         seed.panNode.connect(dest);
+        seed._panDest = dest;
+      } else if (seed.panNode && seed._panDest !== dest) {
+        // Re-route the persistent panner when bus-bypass state flips.
+        try { seed.panNode.disconnect(); } catch (e) {}
+        seed.panNode.connect(dest);
+        seed._panDest = dest;
       }
       const afterPost = seed.panNode || dest;
       if (!seed.postGain && audioCtx) {
