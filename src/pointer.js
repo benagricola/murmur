@@ -25,9 +25,10 @@ import { initAudio, audioCtx } from './audio/context.js';
 import { selectSeed } from './inspector.js';
 import { setDraggedSeed } from './scheduler.js';
 import { takeSnapshot } from './snapshots.js';
-import { setSetPlantModeFn } from './input.js';
+import { setSetPlantModeFn, setStepPlantSelectionFn } from './input.js';
 import { refreshPadLights } from './output/minilab3.js';
 import { labelFor } from './labels.js';
+import { renderPaletteAccordion, openGroupForKind, stepPlantSelection } from './palette.js';
 
 export function canvasCoords(evt) {
   const ctm = canvasEl.getScreenCTM();
@@ -320,6 +321,9 @@ export function setPlantMode(kind) {
   state.plantMode = kind;
   document.querySelectorAll('.plant-opt').forEach(el =>
     el.classList.toggle('active', el === opt));
+  // Keep the accordion's open group tracking the selection (click,
+  // pad, or encoder all funnel through here).
+  openGroupForKind(kind);
   refreshPadLights();
   // Broadcast so the bloom/wind config window can refresh.
   window.dispatchEvent(new CustomEvent('plant-mode-changed', { detail: kind }));
@@ -335,6 +339,9 @@ document.getElementById('plant-group').addEventListener('click', (e) => {
 });
 // Hand setPlantMode to input.js so MiniLab 3 bank-B pads can switch modes.
 setSetPlantModeFn(setPlantMode);
+// Hand the encoder-step fn over too — the MiniLab main rotary scrolls
+// the palette selection (see input.js MAIN_ROTARY_CC).
+setStepPlantSelectionFn(stepPlantSelection);
 
 // Tool-palette drawer toggle (visible only on narrow viewports — CSS
 // handles the show/hide). Tapping the button slides the palette up;
@@ -355,8 +362,8 @@ if (toolPaletteToggle && toolPalette) {
 function buildPalette() {
   const el = document.getElementById('palette');
   if (!el) return;
-  // Swatches sit under the "Seeds" tool-heading already — no need
-  // for a redundant "palette" sub-label.
+  // Swatches sit directly under the seed item in the INSTRUMENT group —
+  // no need for a redundant "palette" sub-label.
   el.innerHTML = '';
   for (const [roleKey, def] of Object.entries(TIMBRE_ROLES)) {
     const item = document.createElement('div');
@@ -372,4 +379,7 @@ function buildPalette() {
     el.appendChild(item);
   }
 }
+// Build the accordion first (it creates #palette), then fill the timbre
+// swatches. Order matters — buildPalette no-ops if #palette is absent.
+renderPaletteAccordion();
 buildPalette();

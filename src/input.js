@@ -13,7 +13,7 @@ import {
 import { playPatch } from './audio/voices.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
 import {
-  liveTimbre, rollLiveTimbre, regenerateLiveTimbre, revertLiveTimbre,
+  liveTimbre, regenerateLiveTimbre, revertLiveTimbre,
   LIVE_ROLE_OCTAVE_SHIFT,
 } from './timbres.js';
 import { state, activeLiveNotes, releasingNotes, sustainedMidis } from './state.js';
@@ -34,6 +34,9 @@ import { logIn } from './midi-log-panel.js';
 // creating an import cycle through the canvas plant code.
 let setPlantModeFn = null;
 export function setSetPlantModeFn(fn) { setPlantModeFn = fn; }
+// Same lazy-hook pattern for the encoder-driven palette scroll.
+let stepPlantSelectionFn = null;
+export function setStepPlantSelectionFn(fn) { stepPlantSelectionFn = fn; }
 
 // === LIVE PLAY (sustained) ===
 
@@ -758,12 +761,14 @@ function handleMIDIMessage(evt) {
     // fall through to controls.js as encoder/fader CCs.
     if (TRANSPORT_UNMAPPED_CCS.has(cc)) return;
     // MiniLab 3 main rotary (relative-1 encoding): 65-67 = +1..+3,
-    // 61-63 = -3..-1, 64 = no change. Twist scrolls through pitched
-    // roles; the patch for each role is cached and reused so
-    // scrolling doesn't continuously re-generate random sounds.
+    // 61-63 = -3..-1, 64 = no change. Twist scrolls the plant palette
+    // selection through every group, auto-opening each as it crosses a
+    // boundary (see palette.js stepPlantSelection).
     if (cc === MAIN_ROTARY_CC) {
-      if (v > 64) rollLiveTimbre(1);
-      else if (v < 64) rollLiveTimbre(-1);
+      if (stepPlantSelectionFn) {
+        if (v > 64) stepPlantSelectionFn(1);
+        else if (v < 64) stepPlantSelectionFn(-1);
+      }
       return;
     }
     // Display encoder CLICK. Press = 127, release = 0.

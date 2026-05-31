@@ -137,6 +137,44 @@
 }
 .plant-opt.event-opt.active .dot::after { border-color: var(--accent); }
 
+/* Palette hover tip — richer "what does this do" detail, fixed-position
+   so it never reflows the drawer. Built in src/palette.js. */
+.palette-tip {
+  position: fixed;
+  z-index: 95;
+  display: none;
+  max-width: 220px;
+  padding: 8px 11px;
+  background: rgba(20, 24, 32, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-family: 'IBM Plex Mono', monospace;
+  pointer-events: none;
+}
+.palette-tip.open { display: block; }
+.palette-tip-head {
+  display: flex; align-items: center; gap: 7px;
+  padding-bottom: 5px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.palette-tip-head .pt-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.palette-tip-head .pt-name {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink, #e8e8e8);
+}
+.palette-tip-head .pt-fn {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--ink-faint, #8a93a0);
+}
+.palette-tip-body {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.74);
+}
+
 /* Muted seeds visibly dim — applies whether muted by sweep or by inspector toggle */
 .seed-wrap.muted { opacity: 0.28; }
 /* Tool-palette divider — see .plant-divider override in the tool-palette
@@ -222,19 +260,17 @@
     z-index: 60;
   }
   .tool-palette.open { transform: translateY(0); }
+  /* Drawer can get tall when a big group is open — let it scroll
+     instead of running off the top of the screen. */
+  .tool-palette {
+    max-height: calc(100vh - 180px);
+    overflow-y: auto;
+  }
   .plant-group {
-    flex-direction: row !important;
-    flex-wrap: wrap;
     width: auto !important;
-    gap: 4px;
-    justify-content: center;
+    min-width: 220px;
   }
-  .plant-opt {
-    padding: 6px 10px;
-    font-size: 9px;
-    min-width: 64px;
-    justify-content: center;
-  }
+  .plant-opt { padding: 8px 12px; }
   .plant-divider { display: none; }
   .app {
     grid-template-rows: auto 1fr auto 56px !important;
@@ -422,9 +458,54 @@ body::before {
 .plant-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  width: 86px;
+  gap: 3px;
+  /* Wide enough to hold the longest "NAME … function" line and the
+     INSTRUMENT header without reflowing (layout-stability rule). */
+  width: 162px;
 }
+/* === Accordion sections === */
+.plant-section { display: flex; flex-direction: column; }
+.plant-section-head {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+  width: 100%;
+  padding: 7px 8px 7px 6px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+.plant-section-head:hover { background: rgba(236, 230, 245, 0.05); color: var(--ink); }
+.plant-section.open > .plant-section-head { color: var(--ink); }
+.sect-chevron {
+  font-size: 8px;
+  color: var(--ink-faint);
+  width: 8px;
+  flex-shrink: 0;
+  transition: transform 0.16s ease;
+}
+.plant-section.open > .plant-section-head .sect-chevron { transform: rotate(90deg); }
+.sect-name { flex: 1; }
+.sect-count {
+  font-size: 9px;
+  color: var(--ink-faint);
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.plant-section.open > .plant-section-head .sect-count { display: none; }
+.plant-section-body {
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 1px 0 4px;
+}
+.plant-section.open > .plant-section-body { display: flex; }
 .tool-heading {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 9px;
@@ -439,13 +520,23 @@ body::before {
 .plant-opt {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
   cursor: pointer;
   color: var(--ink-soft);
   display: flex; align-items: center; gap: 8px;
   white-space: nowrap;
 }
+/* Function-hint word: lowercase, faint, flush-right — distinct from the
+   uppercase garden name so it reads as a separate "what it does" label. */
+.plant-opt .opt-name { flex: 1; }
+.plant-opt .opt-fn {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9px;
+  color: var(--ink-faint);
+}
+.plant-opt.active .opt-fn { color: rgba(255, 209, 102, 0.7); }
 .plant-opt:hover { background: rgba(236,230,245,0.05); }
 .plant-opt.active {
   background: rgba(255, 209, 102, 0.16);
