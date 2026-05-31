@@ -76,6 +76,9 @@ const MOD_TARGETS = {
   squash: [{ key: 'threshold', label: 'threshold', apply: (s, v) => ramp(s.squashComp && s.squashComp.threshold, lerp(-48, -14, v)) }],
   wobble: [{ key: 'rate',  label: 'lfo rate',   apply: (s, v) => ramp(s.wobbleLFO && s.wobbleLFO.frequency, lerp(0.5, 12, v)) }],
   crush:  [{ key: 'tone',  label: 'tone',       apply: (s, v) => ramp(s.crushProcessor && s.crushProcessor.frequency, lerp(700, 6500, v)) }],
+  // A runner can STEER a pan aura's position directly, overriding its
+  // internal sweep for this frame (read in scheduler.updatePanModulation).
+  pan:    [{ key: 'position', label: 'pan position', apply: (s, v) => { s._panDriveVal = v * 2 - 1; s._panDriven = true; } }],
 };
 export function auraModTargets(kind) { return MOD_TARGETS[kind] || []; }
 

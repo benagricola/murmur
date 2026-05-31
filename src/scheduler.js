@@ -570,7 +570,7 @@ function updateRunnerModulation(now) {
   // links — so removing a link (or a runner) restores the target next
   // frame with no explicit cleanup.
   for (const m of seeds) {
-    if (m.kind === 'modifier' && m.modifierKind !== 'runner') m._lfoMod = 1;
+    if (m.kind === 'modifier' && m.modifierKind !== 'runner') { m._lfoMod = 1; m._panDriven = false; }
     else if (m.kind === 'voice') { m._modVol = 1; m._pitchMod = 0; }
   }
   for (const R of runners) {
@@ -608,8 +608,14 @@ function updatePanModulation(now) {
   const pans = [];
   for (const m of seeds) {
     if (m.kind !== 'modifier' || m.modifierKind !== 'pan' || !m.sphereR) continue;
-    const period = Math.max(0.05, (m.panBars || 1) * BAR_MS / 1000);
-    pans.push({ m, val: Math.sin((t / period) * Math.PI * 2), width: m.centerIntensity != null ? m.centerIntensity : 1 });
+    if (m._panDriven) {
+      // A runner is steering this pan aura's position this frame — its
+      // override already carries the swing, so width is folded in (1).
+      pans.push({ m, val: m._panDriveVal, width: 1 });
+    } else {
+      const period = Math.max(0.05, (m.panBars || 1) * BAR_MS / 1000);
+      pans.push({ m, val: Math.sin((t / period) * Math.PI * 2), width: m.centerIntensity != null ? m.centerIntensity : 1 });
+    }
   }
   for (const v of seeds) {
     if (v.kind !== 'voice' || !v.panNode) continue;
