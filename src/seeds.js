@@ -101,6 +101,32 @@ export function auraIntensityForSeed(aura, seed) {
   return auraIntensityAt(aura, seed.cx, seed.cy);
 }
 
+// Keep a voice's capturedByIds (and the auras' capturedSeedIds) in sync
+// with whichever aura spheres it's currently inside. Runners are
+// excluded — they modulate via explicit tendrils, not by capture.
+export function updateVoiceCaptures(v) {
+  if (!v.capturedByIds) v.capturedByIds = new Set();
+  const newCaptors = new Set();
+  for (const m of seeds) {
+    if (m.kind !== 'modifier' || m.modifierKind === 'runner' || !m.sphereR) continue;
+    if (Math.hypot(v.cx - m.cx, v.cy - m.cy) < m.sphereR) newCaptors.add(m.id);
+  }
+  for (const id of v.capturedByIds) {
+    if (!newCaptors.has(id)) { const m = seedById(id); if (m) m.capturedSeedIds.delete(v.id); }
+  }
+  for (const id of newCaptors) {
+    if (!v.capturedByIds.has(id)) { const m = seedById(id); if (m) m.capturedSeedIds.add(v.id); }
+  }
+  v.capturedByIds = newCaptors;
+}
+
+// Recompute captures for every voice — call whenever seeds OR auras
+// move (drag, and physics drift), so the capture relationship is always
+// live and an aura placed onto a seed affects it immediately.
+export function reevaluateAllCaptures() {
+  for (const v of seeds) if (v.kind === 'voice') updateVoiceCaptures(v);
+}
+
 // Default wanderlust per role — drums anchored, melody/voice drift.
 // Per-seed override via inspector slider; saved by snapshots.
 export function defaultWanderlust(kind, role) {

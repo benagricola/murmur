@@ -15,6 +15,7 @@ import { state, seeds, seedById } from './state.js';
 import {
   canvasEl, canvasWrap, SVGNS, tethersLayer,
   makeSeed, syncRenderedSeeds, renderSeed, renderSpheres, renderTethers,
+  updateVoiceCaptures, reevaluateAllCaptures,
 } from './seeds.js';
 import { setupAuraChain, auraEntry, auraHarmonics, auraBaseR } from './auras/registry.js';
 import {
@@ -184,36 +185,9 @@ function continueDrag(evt) {
   }
 }
 
-// Sync a voice's capturedByIds with the modifiers whose spheres it's
-// currently inside.
-function updateVoiceCaptures(v) {
-  if (!v.capturedByIds) v.capturedByIds = new Set();
-  const newCaptors = new Set();
-  for (const m of seeds.filter(s => s.kind === 'modifier')) {
-    if (Math.hypot(v.cx - m.cx, v.cy - m.cy) < m.sphereR) {
-      newCaptors.add(m.id);
-    }
-  }
-  for (const id of v.capturedByIds) {
-    if (!newCaptors.has(id)) {
-      const m = seedById(id);
-      if (m) m.capturedSeedIds.delete(v.id);
-    }
-  }
-  for (const id of newCaptors) {
-    if (!v.capturedByIds.has(id)) {
-      const m = seedById(id);
-      if (m) m.capturedSeedIds.add(v.id);
-    }
-  }
-  v.capturedByIds = newCaptors;
-}
-
-export function reevaluateAllCaptures() {
-  for (const v of seeds.filter(s => s.kind === 'voice')) {
-    updateVoiceCaptures(v);
-  }
-}
+// Capture logic lives in seeds.js (so the scheduler can call it on
+// physics drift without an import cycle). Re-export for main.js.
+export { reevaluateAllCaptures };
 
 function endDrag() {
   if (drag) {

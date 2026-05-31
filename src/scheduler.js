@@ -25,6 +25,7 @@ import { BAR_MS } from './tempo.js';
 import {
   SVGNS, seedNodes, blobPath, renderSeed, renderTethers, animateTethers,
   updateSphereTransforms, auraIntensityForSeed, renderRunnerTendrils,
+  reevaluateAllCaptures,
 } from './seeds.js';
 import { auraGainDefault, auraModTargets } from './auras/registry.js';
 import { DRUM_KIT, DRUM_KIT_FUNDAMENTAL_HZ } from './audio/drum-kit.js';
@@ -506,6 +507,10 @@ function physicsStep(silent) {
     }
   }
   if (anyMoved && !silent) {
+    // Keep the capture relationship live as seeds drift (and as auras
+    // get bumped), so an aura's effect tracks position without needing
+    // a seed to be dragged out and back in.
+    reevaluateAllCaptures();
     renderTethers();
     updateSphereTransforms();
   }
